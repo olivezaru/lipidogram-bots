@@ -57,18 +57,30 @@ SPAM_LINKS_PATTERN = re.compile(
     re.IGNORECASE
 )
 
-# RSS-каналы доказательной кардиологии на YouTube
-YOUTUBE_CHANNELS = [
-    {"name": "Российское кардиологическое общество (РКО)", "id": "UCe1997q9K009Qj_7eS_eP-A", "handle": "@scardioru"},
-    {"name": "НМИЦ ТПМ Минздрава России", "id": "UCk0mY3fT6vR3VpG-x4m2t7Q", "handle": "@gnicpm"},
+# Мировая база YouTube-каналов доказательной кардиологии и здоровья сосудов (США, Европа, РФ)
+GLOBAL_HEALTH_CHANNELS = [
+    # США и Европа
+    {"name": "Dr. Peter Attia (США, эксперт по долголетию и липидологии)", "handle": "@PeterAttiaMD"},
+    {"name": "Huberman Lab (Стэнфорд, США)", "handle": "@hubermanlab"},
+    {"name": "Dr. Gil Carvalho (Nutrition Made Simple, США)", "handle": "@NutritionMadeSimple"},
+    {"name": "Dr. Rhonda Patrick (FoundMyFitness, США)", "handle": "@FoundMyFitness"},
+    {"name": "Dr. Brad Stanfield (Новая Зеландия / США)", "handle": "@DrBradStanfield"},
+    {"name": "Simon Hill / The Proof (Великобритания / Австралия)", "handle": "@TheProofWithSimonHill"},
+    {"name": "MedCram - Medical Lectures Explained (США)", "handle": "@Medcram"},
+    
+    # Отечественные лидеры мнений
+    {"name": "Доктор Утин (кардиохирург Алексей Утин)", "handle": "@DoctorUtin"},
+    {"name": "Кардиолог Тамаз Гаглошвили", "handle": "@doctor_tamaz"},
+    {"name": "СМТ — Научный подход (Борис Цацулин)", "handle": "@CavemanTech"},
+    {"name": "Российское кардиологическое общество (РКО)", "handle": "@scardioru"}
 ]
 
 RUBRICS = [
     {
-        "category": "📺 ВЫЖИМКА ЛЕКЦИИ РКО / YOUTUBE",
+        "category": "🌍 МИРОВОЙ НАУЧПОП / ВЫЖИМКА ВИДЕО (США, ЕВРОПА, РФ)",
         "source_type": "youtube",
-        "ru_theme": "Главные тезисы из видеолекций ведущих кардиологов и экспертов РКО",
-        "hashtags": "#Липидограм_Видео #ЛекцияРКО #Кардиология #Практика"
+        "ru_theme": "Главные практические инсайты из видео мировых и отечественных врачей (Peter Attia, Huberman, Утин, Rhonda Patrick)",
+        "hashtags": "#Липидограм_МировойОпыт #Научпоп #Долголетие #ЗдоровьеСосудов"
     },
     {
         "category": "🥗 ГИПОЛИПИДЕМИЧЕСКАЯ КУХНЯ",
@@ -109,72 +121,77 @@ RUBRICS = [
 
 SYSTEM_PROMPT = """
 Ты — ведущий научный редактор русскоязычного Telegram-канала «Липидограм» (@lipidogram).
-Твоя задача — писать экспертный, понятный и полезный пост НА РУССКОМ ЯЗЫКЕ на основе предоставленного первоисточника.
+Твоя задача — писать живые, увлекательные, емкие и практически полезные посты ИСКЛЮЧИТЕЛЬНО НА РУССКОМ ЯЗЫКЕ на основе первоисточника.
 
-Если тебе передан транскрипт видео с YouTube:
-- Выдели ключевую суть и практические рекомендации лектора (без вводных слов и приветствий).
-- Оформи в виде структурированного дайджеста видеолекции.
+Если передан транскрипт видео с YouTube (на английском или русском языке):
+- Сделай концентрированную выжимку на чистом, понятном русском языке: о чем видео, главные тезисы мирового или отечественного эксперта, советы зрителям.
+- Убери вступительную «воду», саморекламу и приветствия.
+- Переводи сложные медицинские термины понятно для широкой аудитории с сохранением научной точности (ЛПНП, АпоВ, эндотелий, пульсовая Зона 2).
 
 Формат публикации (HTML):
 • Заголовок: Яркий, привлекательный, с тематическими эмодзи (в тегах <b>Заголовок</b>).
-• Введение: 1-2 предложения, почему тема видео/статьи важна для сохранения чистоты сосудов.
-• Ключевые тезисы: 3-4 четких пункта с цифрами, нормами и объяснениями.
-• Практический совет: Четкое действие для читателя.
-• Первоисточник: Кликабельная ссылка СТРОГО на предоставленный URL: <a href="ТОЧНЫЙ_URL">Название / Источник</a>.
+• Введение: 1-2 предложения, в чем практическая ценность выступления эксперта для здоровья сосудов и сердца.
+• Главные тезисы эксперта: 3-4 четких пункта с цифрами, фактами и объяснениями спикера.
+• Практический вывод: Четкое действие для читателя (в тарелке, на тренировке или в лаборатории).
+• Первоисточник: Кликабельная ссылка СТРОГО на предоставленный URL: <a href="ТОЧНЫЙ_URL">Смотреть выпуск на YouTube (Канал / Спикер)</a>.
 • Хештеги рубрики в самом конце.
 
 Используй только валидные теги: <b>, </b>, <i>, </i>, <code>, </code>, <a href="...">.
 Все знаки «меньше» или «больше» пиши словами («менее», «более») или экранируй (&lt; и &gt;).
 """
 
-def fetch_youtube_lecture() -> dict:
-    """Ищет видео на официальном канале РКО и скачивает транскрипт лекции."""
+def fetch_global_youtube_video() -> dict:
+    """Ищет видео на мировых и российских научно-популярных каналах и забирает транскрипт (en/ru)."""
+    import random
+    channel = random.choice(GLOBAL_HEALTH_CHANNELS)
+    
     try:
-        # Открываем официальный канал РКО @scardioru
-        channel_url = "https://www.youtube.com/@scardioru/videos"
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+        channel_url = f"https://www.youtube.com/{channel['handle']}/videos"
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        }
         resp = requests.get(channel_url, headers=headers, timeout=8)
         
         video_ids = []
         if resp.status_code == 200:
-            # Извлекаем ID видео из страницы канала
             matches = re.findall(r'"videoId":"([a-zA-Z0-9_-]{11})"', resp.text)
-            video_ids = list(dict.fromkeys(matches))  # Удаляем дубликаты
-            
-        if not video_ids:
-            # Популярные проверенные видеолекции РКО по дислипидемиям и атеросклерозу
-            video_ids = ["e7B1W6vHq3A", "5Xk_wGqL2bY", "3N8jK9P7V2M", "X9vLm7Z4K1Q"]
+            video_ids = list(dict.fromkeys(matches))
 
-        import random
         random.shuffle(video_ids)
 
-        for vid in video_ids[:5]:
+        for vid in video_ids[:8]:
             try:
-                # Получаем субтитры на русском языке
-                transcript_list = YouTubeTranscriptApi.get_transcript(vid, languages=['ru'])
+                # Пробуем получить субтитры на английском или русском языке
+                transcript_list = YouTubeTranscriptApi.get_transcript(vid, languages=['en', 'en-US', 'ru'])
                 full_text = " ".join([t['text'] for t in transcript_list])
                 
-                if len(full_text) > 300:
+                # Ключевые слова для фильтрации видео (на русском и английском)
+                keywords = [
+                    "cholesterol", "ldl", "apob", "artery", "atherosclerosis", "heart", "diet", "zone 2", "exercise", "lipids", "statins", "omega-3", "blood pressure",
+                    "холестерин", "сосуд", "сердц", "лпнп", "давлен", "питан", "статины", "жир", "тренировк", "анализ", "спорт", "бляшк", "артери"
+                ]
+                
+                if len(full_text) > 400 and any(kw in full_text.lower() for kw in keywords):
                     video_url = f"https://www.youtube.com/watch?v={vid}"
                     return {
-                        "title": "Клиническая видеолекция экспертов РКО",
-                        "journal": "Официальный YouTube-канал РКО (@scardioru)",
+                        "title": f"Разбор эксперта: {channel['name']}",
+                        "journal": f"YouTube-канал {channel['name']}",
                         "year": "2025-2026",
-                        "content": full_text[:3500],  # Передаем выдержку из лекции
+                        "content": full_text[:3500],
                         "url": video_url
                     }
             except Exception:
                 continue
 
     except Exception as e:
-        logging.warning(f"Ошибка получения видео РКО ({e})")
+        logging.warning(f"Ошибка получения видео с канала {channel['name']}: {e}")
 
     return {
-        "title": "Официальный образовательный видеоканал Российского кардиологического общества",
-        "journal": "YouTube-канал РКО (@scardioru)",
+        "title": f"Разбор мировых экспертов о здоровье сердца и сосудов",
+        "journal": f"YouTube-канал {channel['name']}",
         "year": "2025-2026",
-        "content": "Лекции и разборы клинических рекомендаций по липидологии, ИБС и кардиоваскулярной профилактике.",
-        "url": "https://www.youtube.com/@scardioru"
+        "content": "Подробный разбор факторов риска атеросклероза, контроля АпоВ и ЛПНП, кардио-тренировок 2-й пульсовой зоны и оптимизации питания.",
+        "url": f"https://www.youtube.com/{channel['handle']}"
     }
 
 def decode_mime_words(s):
@@ -417,15 +434,15 @@ async def generate_and_publish_post() -> tuple[bool, str]:
 
     logging.info(f"Запуск рубрики: {rubric['category']} ({rubric['ru_theme']})")
 
-    # Обработка источника YouTube
+    # YouTube-выжимка из мировых и отечественных каналов
     if rubric.get("source_type") == "youtube":
-        study = fetch_youtube_lecture()
+        study = fetch_global_youtube_video()
         prompt = (
             f"Напиши готовый пост НА РУССКОМ ЯЗЫКЕ для Telegram-канала «Липидограм» в рубрику «{rubric['category']}».\n"
             f"Тема: {rubric['ru_theme']}\n\n"
-            f"ТЕКСТ ВЫСТУПЛЕНИЯ ЛЕКТОРА (ТРАНСКРИПТ ВИДЕО YOUTUBE):\n{study.get('content', '')}\n\n"
-            f"Сделай краткую, емкую, практичную выжимку ключевых тезисов лектора.\n"
-            f"В блоке Первоисточник поставь ТОЧНО эту ссылку на видео: <a href='{study['url']}'>{study['title']} / {study['journal']}</a>.\n"
+            f"ТЕКСТ ВЫСТУПЛЕНИЯ СПИКЕРА (ТРАНСКРИПТ ВИДЕО YOUTUBE):\n{study.get('content', '')}\n\n"
+            f"Сделай краткую, емкую, практичную выжимку ключевых тезисов мирового эксперта на чистом русском языке.\n"
+            f"В блоке Первоисточник поставь ТОЧНО эту ссылку на видео: <a href='{study['url']}'>{study['title']} ({study['journal']})</a>.\n"
             f"В самом конце обязательно добавь хештеги: {rubric['hashtags']}"
         )
     elif rubric.get("source_type") == "rko":
@@ -531,24 +548,24 @@ async def generate_and_publish_post() -> tuple[bool, str]:
 # --- Хэндлеры команд ---
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
-    await message.reply("🫀 Медиа-бот «Липидограм» активен.\n\nКоманды:\n• /post_now — публикация следующего поста из контент-плана (YouTube-лекции, Рецепты, Спорт, Мифы, Наука, РКО).\n• /check_email — проверить почту на свежие письма от РКО.")
+    await message.reply("🫀 Медиа-бот «Липидограм» активен.\n\nКоманды:\n• /post_now — публикация следующего поста (Мировой YouTube, Рецепты, Спорт, Мифы, Наука, РКО).\n• /check_email — проверить почту на рассылку РКО.")
 
 @dp.message(Command("check_email"))
 async def cmd_check_email(message: types.Message):
-    await message.reply("📬 Проверяю ваш почтовый ящик на свежие письма от РКО...")
+    await message.reply("📬 Проверяю почтовый ящик на свежие письма от РКО...")
     email_data = fetch_rko_from_email()
     if email_data:
         await message.reply(f"Найдено письмо: «{email_data['title']}»! Генерирую пост...")
         global current_rubric_index
-        current_rubric_index = 5  # Рубрика рассылки РКО
+        current_rubric_index = 5
         success, result_text = await generate_and_publish_post()
         await message.reply("✅ " + result_text if success else "❌ " + result_text)
     else:
-        await message.reply("Новых писем от РКО в ящике сейчас нет. Бот будет использовать открытые новости сайта, YouTube и PubMed.")
+        await message.reply("Новых писем от РКО в ящике сейчас нет. Бот использует мировые каналы YouTube, открытые новости и PubMed.")
 
 @dp.message(Command("post_now"))
 async def cmd_post_now(message: types.Message):
-    await message.reply("⏳ Запрашиваю материал (YouTube-лекция РКО / PubMed Abstract / РКО) и формирую пост...")
+    await message.reply("⏳ Запрашиваю материал (Мировой YouTube США/Европы / PubMed Abstract / РКО) и формирую пост...")
     success, result_text = await generate_and_publish_post()
     if success:
         await message.reply("✅ " + result_text)
@@ -642,7 +659,7 @@ async def run_server():
 async def main():
     await run_server()
 
-    # График автопостинга: в 10:00 и 18:30 по МСК
+    # График автопостинга: 10:00 (утренний дайджест) и 18:30 (вечерняя практика/мировой опыт) по МСК
     scheduler = AsyncIOScheduler(timezone="Europe/Moscow")
     scheduler.add_job(generate_and_publish_post, "cron", hour=10, minute=0)
     scheduler.add_job(generate_and_publish_post, "cron", hour=18, minute=30)
