@@ -1,0 +1,9 @@
+services:
+  - type: worker
+    name: lipidogram-bot-worker
+    runtime: python
+    region: frankfurt
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python bot_runner.py
+    autoDeploy: true
