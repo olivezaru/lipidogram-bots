@@ -48,13 +48,12 @@ SPAM_LINKS_PATTERN = re.compile(
     re.IGNORECASE
 )
 
-# 5 строго чередующихся рубрик (включая российские новости РКО и международный PubMed)
 RUBRICS = [
     {
-        "category": "🇷🇺 НОВОСТИ РКО И РОССИЙСКОЙ КАРДИОЛОГИИ",
+        "category": "🇷🇺 ОТКРЫТЫЕ НОВОСТИ РОССИЙСКОЙ КАРДИОЛОГИИ (РКО)",
         "source_type": "rko",
         "query": "липиды холестерин атеросклероз",
-        "ru_theme": "Клинические новости и статьи Российского кардиологического общества (РКО) и журнала РКЖ",
+        "ru_theme": "Свежие открытые новости Российского кардиологического общества (РКО) и журнала РКЖ",
         "hashtags": "#Липидограм_РКО #КардиологияРФ #РКО #ЗдоровьеСердца"
     },
     {
@@ -79,7 +78,7 @@ RUBRICS = [
         "hashtags": "#Мифы_Липидограм #Доказательно #Холестерин"
     },
     {
-        "category": "🔬 МЕЖДУНАРОДНЫЙ НАУЧНЫЙ ДАЙДЖЕСТ",
+        "category": "🔬 МЕЖДУНАРОДНЫЙ НАУЧНЫЙ ДАЙДЖЕСТ (2025-2026)",
         "source_type": "pubmed",
         "query": "(LDL-C OR Apolipoprotein B OR atherosclerosis) AND (meta-analysis OR clinical trial)",
         "ru_theme": "Свежие международные мета-анализы липидологии (ЛПНП, АпоВ, триглицериды, шкала SCORE-2)",
@@ -96,7 +95,7 @@ SYSTEM_PROMPT = """
 2. Введение: 1-2 предложения, почему тема важна для здоровья сердца, сосудов и долголетия.
 3. Научная суть: 3-4 емких тезиса с фактами, цифрами (граммами, процентами) на понятном русском языке.
 4. Практический совет: Четкое действие для читателя (в тарелке, на тренировке или в лаборатории).
-5. Первоисточник: Кликабельная ссылка СТРОГО на предоставленный реальный URL: <a href="ТОЧНЫЙ_URL_СТАТЬИ">Название исследования / Журнал / Источник</a>.
+5. Первоисточник: Кликабельная ссылка СТРОГО на предоставленный реальный URL: <a href="ТОЧНЫЙ_URL_СТАТЬИ">Название статьи / Журнал / Источник</a>.
 6. Хештеги рубрики в самом конце.
 
 Используй только валидные теги Telegram: <b>, </b>, <i>, </i>, <code>, </code>, <a href="...">.
@@ -104,40 +103,43 @@ SYSTEM_PROMPT = """
 """
 
 def fetch_rko_news() -> dict:
-    """Парсит свежие новости и статьи с официального портала РКО (scardio.ru)."""
+    """Парсит открытые публичные новости с сайта РКО (scardio.ru/news), доступные без регистрации."""
     try:
         url = "https://scardio.ru/news/"
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        }
         resp = requests.get(url, headers=headers, timeout=8)
         if resp.status_code == 200:
             soup = BeautifulSoup(resp.text, "html.parser")
-            # Ищем новостные карточки на scardio.ru
-            news_items = soup.find_all("a", href=re.compile(r"/news/.*"))
+            links = soup.find_all("a", href=True)
             valid_news = []
-            for item in news_items:
-                title = item.get_text(strip=True)
-                href = item.get("href", "")
-                if len(title) > 20 and not href.endswith("/news/"):
-                    full_link = f"https://scardio.ru{href}" if href.startswith("/") else href
-                    valid_news.append({"title": title, "url": full_link})
+            
+            for a in links:
+                href = a["href"]
+                title = a.get_text(strip=True)
+                if "/news/" in href and len(title) > 25 and not href.endswith("/news/"):
+                    full_url = f"https://scardio.ru{href}" if href.startswith("/") else href
+                    if not any(x in full_url for x in ["page=", "category=", "archive"]):
+                        valid_news.append({"title": title, "url": full_url})
             
             if valid_news:
                 import random
-                selected = random.choice(valid_news[:8])
+                selected = random.choice(valid_news[:10])
                 return {
                     "title": selected["title"],
-                    "journal": "Российское кардиологическое общество (scardio.ru)",
+                    "journal": "Новости Российского кардиологического общества (РКО)",
                     "year": "2025-2026",
                     "url": selected["url"]
                 }
     except Exception as e:
-        logging.warning(f"Парсинг РКО не удался ({e}), используем раздел клинических рекомендаций.")
-        
+        logging.warning(f"Ошибка получения открытых новостей РКО ({e})")
+
     return {
-        "title": "Клинические рекомендации по нарушениям липидного обмена и профилактике",
-        "journal": "Российское кардиологическое общество (РКО / НОА)",
+        "title": "Открытые научно-клинические новости кардиологии",
+        "journal": "Российское кардиологическое общество (РКО)",
         "year": "2025-2026",
-        "url": "https://scardio.ru/rekomendacii/rekomendacii_rko/"
+        "url": "https://scardio.ru/news/"
     }
 
 def fetch_fresh_pubmed_study(query: str) -> dict:
@@ -228,15 +230,14 @@ async def generate_and_publish_post() -> tuple[bool, str]:
 
     logging.info(f"Запуск рубрики: {rubric['category']} ({rubric['ru_theme']})")
 
-    # Получаем статью: если рубрика РКО — берем с scardio.ru, иначе из PubMed API
     if rubric.get("source_type") == "rko":
         study = fetch_rko_news()
         prompt = (
             f"Напиши готовый пост НА РУССКОМ ЯЗЫКЕ для Telegram-канала «Липидограм» в рубрику «{rubric['category']}».\n"
             f"Тема: {rubric['ru_theme']}\n"
-            f"Российский первоисточник: {study['title']}\n"
+            f"Российский открытый первоисточник: {study['title']}\n"
             f"Организация/Журнал: {study['journal']} ({study['year']})\n"
-            f"Ссылка на материал: {study['url']}\n\n"
+            f"Ссылка на открытый материал: {study['url']}\n\n"
             f"В блоке Первоисточник поставь ТОЧНО эту ссылку: <a href='{study['url']}'>{study['title']} / {study['journal']}</a>.\n"
             f"В самом конце обязательно добавь хештеги: {rubric['hashtags']}"
         )
@@ -258,7 +259,7 @@ async def generate_and_publish_post() -> tuple[bool, str]:
             prompt = (
                 f"Напиши готовый пост НА РУССКОМ ЯЗЫКЕ для Telegram-канала «Липидограм» в рубрику «{rubric['category']}» на тему: {rubric['ru_theme']}.\n"
                 "Опирайся на доказательную медицину и клинические рекомендации РКО/ESC.\n"
-                "В первоисточнике укажи ссылку на рекомендации РКО: <a href='https://scardio.ru/rekomendacii/rekomendacii_rko/'>Рекомендации Российского кардиологического общества (РКО)</a>.\n"
+                "В первоисточнике укажи ссылку на открытые новости РКО: <a href='https://scardio.ru/news/'>Открытые новости Российского кардиологического общества (РКО)</a>.\n"
                 f"В самом конце добавь хештеги: {rubric['hashtags']}"
             )
 
@@ -328,11 +329,11 @@ async def generate_and_publish_post() -> tuple[bool, str]:
 # --- Хэндлеры команд ---
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
-    await message.reply("🫀 Медиа-бот «Липидограм» активен.\n\nКоманда /post_now — публикация следующего поста из контент-плана (РКО ➔ Рецепты ➔ Спорт ➔ Мифы ➔ Международная наука).")
+    await message.reply("🫀 Медиа-бот «Липидограм» активен.\n\nКоманда /post_now — публикация следующего поста из контент-плана (Открытые новости РКО ➔ Рецепты ➔ Спорт ➔ Мифы ➔ Международная наука).")
 
 @dp.message(Command("post_now"))
 async def cmd_post_now(message: types.Message):
-    await message.reply("⏳ Запрашиваю свежий материал (РКО / PubMed) и формирую пост...")
+    await message.reply("⏳ Запрашиваю свежий материал (открытые новости РКО / PubMed) и формирую пост...")
     success, result_text = await generate_and_publish_post()
     if success:
         await message.reply("✅ " + result_text)
@@ -426,7 +427,7 @@ async def run_server():
 async def main():
     await run_server()
 
-    # График автопостинга: в 10:00 и 18:30 по МСК
+    # График публикаций: в 10:00 и 18:30 по МСК
     scheduler = AsyncIOScheduler(timezone="Europe/Moscow")
     scheduler.add_job(generate_and_publish_post, "cron", hour=10, minute=0)
     scheduler.add_job(generate_and_publish_post, "cron", hour=18, minute=30)
