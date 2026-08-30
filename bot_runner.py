@@ -3,6 +3,7 @@ import re
 import asyncio
 import logging
 import requests
+import xml.etree.ElementTree as ET
 from bs4 import BeautifulSoup
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
@@ -48,67 +49,150 @@ SPAM_LINKS_PATTERN = re.compile(
     re.IGNORECASE
 )
 
+# Точные поисковые запросы (только RCT, клинические исследования и обзоры по кардиологии и спорту)
 RUBRICS = [
     {
-        "category": "🇷🇺 ОТКРЫТЫЕ НОВОСТИ РОССИЙСКОЙ КАРДИОЛОГИИ (РКО)",
-        "source_type": "rko",
-        "query": "липиды холестерин атеросклероз",
-        "ru_theme": "Свежие открытые новости Российского кардиологического общества (РКО) и журнала РКЖ",
-        "hashtags": "#Липидограм_РКО #КардиологияРФ #РКО #ЗдоровьеСердца"
+        "category": "🏃 СПОРТ И СОСУДЫ",
+        "source_type": "pubmed",
+        "query": '("aerobic exercise" OR "resistance training" OR "interval training") AND ("flow-mediated dilation" OR "endothelial" OR "HDL-C" OR "lipid profile") AND ("trial" OR "randomized")',
+        "ru_theme": "Влияние аэробных/силовых тренировок на сосудистый эндотелий, ЛПВП и триглицериды",
+        "hashtags": "#СпортИСосуды #ЗдоровьеСердца #Кардиотренировки #Эндотелий"
     },
     {
         "category": "🥗 ГИПОЛИПИДЕМИЧЕСКАЯ КУХНЯ",
         "source_type": "pubmed",
-        "query": "(soluble dietary fiber OR beta-glucan OR Mediterranean diet) AND (cholesterol OR lipid profile)",
-        "ru_theme": "Кулинарный гиполипидемический рецепт (насыщенные жиры менее 2г, растворимая клетчатка более 6г, овес, бобовые, омега-3)",
+        "query": '("dietary fiber" OR "beta-glucan" OR "legumes" OR "flaxseed") AND ("LDL cholesterol" OR "lipids") AND ("trial" OR "randomized")',
+        "ru_theme": "Растворимая клетчатка, продукты и нутриенты для снижения ЛПНП и синтеза желчных кислот",
         "hashtags": "#Рецепт_ЛПНП #УмнаяЗамена #ПитаниеСердца #Клетчатка"
     },
     {
-        "category": "🏃 СПОРТ И СОСУДЫ (2025-2026)",
+        "category": "🔬 СВЕЖАЯ НАУКА И АНАЛИЗЫ",
         "source_type": "pubmed",
-        "query": "(Zone 2 aerobic exercise OR resistance training) AND (endothelial function OR HDL-C OR cardiovascular risk)",
-        "ru_theme": "Спорт и сосуды: кардио во 2-й пульсовой зоне, силовые тренировки, шаги и их влияние на ЛПВП и эндотелий",
-        "hashtags": "#СпортИСосуды #ЗдоровьеСердца #ПульсовыеЗоны #Кардио"
+        "query": '("Apolipoprotein B" OR "LDL-C lowering" OR "PCSK9" OR "SCORE2") AND ("cardiovascular risk" OR "atherosclerosis") AND ("guidelines" OR "trial" OR "meta-analysis")',
+        "ru_theme": "Клинические маркеры атеросклероза (АпоВ, ЛПНП, триглицериды, шкала риска SCORE-2)",
+        "hashtags": "#Липидограм_Наука #Кардиология #ЛПНП #PubMed"
     },
     {
         "category": "💡 РАЗБОР МИФОВ ДОКАЗАТЕЛЬНОЙ МЕДИЦИНОЙ",
         "source_type": "pubmed",
-        "query": "(dietary cholesterol OR eggs OR statins safety OR omega-3) AND (systematic review OR trial)",
-        "ru_theme": "Разбор популярного мифа (яйца и холестерин, статины и печень, кофе и сосуды, чистки сосудов)",
+        "query": '("dietary cholesterol" OR "eggs" OR "statins" OR "omega-3 fatty acids") AND ("atherosclerosis" OR "cardiovascular") AND ("meta-analysis" OR "systematic review")',
+        "ru_theme": "Разбор фактов и мифов: холестерин в еде, статины, добавки омега-3, чистки сосудов",
         "hashtags": "#Мифы_Липидограм #Доказательно #Холестерин"
     },
     {
-        "category": "🔬 МЕЖДУНАРОДНЫЙ НАУЧНЫЙ ДАЙДЖЕСТ (2025-2026)",
-        "source_type": "pubmed",
-        "query": "(LDL-C OR Apolipoprotein B OR atherosclerosis) AND (meta-analysis OR clinical trial)",
-        "ru_theme": "Свежие международные мета-анализы липидологии (ЛПНП, АпоВ, триглицериды, шкала SCORE-2)",
-        "hashtags": "#Липидограм_Наука #Кардиология #ЛПНП #PubMed"
+        "category": "🇷🇺 ОТКРЫТЫЕ НОВОСТИ РОССИЙСКОЙ КАРДИОЛОГИИ (РКО)",
+        "source_type": "rko",
+        "query": "липиды холестерин",
+        "ru_theme": "Открытые новости и регистры Российского кардиологического общества (РКО)",
+        "hashtags": "#Липидограм_РКО #КардиологияРФ #РКО #ЗдоровьеСердца"
     }
 ]
 
 SYSTEM_PROMPT = """
 Ты — ведущий научный редактор русскоязычного Telegram-канала «Липидограм» (@lipidogram).
-Твоя задача — писать увлекательные, кристально понятные, профессиональные посты ИСКЛЮЧИТЕЛЬНО НА РУССКОМ ЯЗЫКЕ.
+Твоя задача — написать экспертный, интересный и строго соответствующий первоисточнику пост НА РУССКОМ ЯЗЫКЕ.
 
-Правила публикации:
-1. Заголовок: Яркий, привлекательный, с тематическими эмодзи (в тегах <b>Заголовок</b>).
-2. Введение: 1-2 предложения, почему тема важна для здоровья сердца, сосудов и долголетия.
-3. Научная суть: 3-4 емких тезиса с фактами, цифрами (граммами, процентами) на понятном русском языке.
-4. Практический совет: Четкое действие для читателя (в тарелке, на тренировке или в лаборатории).
-5. Первоисточник: Кликабельная ссылка СТРОГО на предоставленный реальный URL: <a href="ТОЧНЫЙ_URL_СТАТЬИ">Название статьи / Журнал / Источник</a>.
-6. Хештеги рубрики в самом конце.
+КРИТИЧЕСКИ ВАЖНОЕ ПРАВИЛО ДОСТОВЕРНОСТИ:
+Тебе передан полный текст АННОТАЦИИ (Abstract) статьи из PubMed.
+Ты обязан писать пост СТРОГО НА ОСНОВЕ ПЕРЕДАННОГО АБСТРАКТА.
+- Опиши реальный эксперимент, выборку и выводы ученых из этого текста.
+- Запрещено придумывать факты, темы или выводы, которых нет в абстракте.
 
-Используй только валидные теги Telegram: <b>, </b>, <i>, </i>, <code>, </code>, <a href="...">.
-Все знаки «меньше» или «больше» пиши словами («менее», «более») или экранируй, чтобы не ломать HTML-разметку.
+Формат публикации (HTML):
+• Заголовок: Яркий, привлекательный, с тематическими эмодзи (в тегах <b>Заголовок</b>).
+• Введение: 1-2 предложения, в чем практическая польза исследования для сосудов.
+• Научная суть (по результатам статьи): 3-4 емких тезиса с конкретными цифрами и выводами из абстракта.
+• Практический совет: Четкое действие для читателя (в тренировках, питании или контроле здоровья).
+• Первоисточник: Кликабельная ссылка СТРОГО на предоставленный URL: <a href="ТОЧНЫЙ_URL_СТАТЬИ">Название статьи / Журнал (PMID: НОМЕР)</a>.
+• Хештеги рубрики в самом конце.
+
+Используй только валидные теги: <b>, </b>, <i>, </i>, <code>, </code>, <a href="...">.
+Все знаки «меньше» или «больше» пиши словами («менее», «более») или экранируй (&lt; и &gt;).
 """
 
+def fetch_pubmed_study_with_abstract(query: str) -> dict:
+    """Ищет статью в PubMed и скачивает полный текст Abstract через efetch API."""
+    try:
+        search_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
+        params = {
+            "db": "pubmed",
+            "term": query,
+            "mindate": "2023/01/01",
+            "maxdate": "2026/12/31",
+            "datetype": "pdat",
+            "retmax": 10,
+            "sort": "pub_date",
+            "retmode": "json"
+        }
+        res = requests.get(search_url, params=params, timeout=7)
+        data = res.json()
+        id_list = data.get("esearchresult", {}).get("idlist", [])
+        
+        if not id_list:
+            params.pop("mindate", None)
+            params.pop("maxdate", None)
+            res = requests.get(search_url, params=params, timeout=7)
+            id_list = res.json().get("esearchresult", {}).get("idlist", [])
+
+        if not id_list:
+            return None
+
+        import random
+        # Пробуем получить абстракт для нескольких найденных PMID
+        random.shuffle(id_list)
+        
+        for pmid in id_list[:4]:
+            fetch_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi"
+            fetch_params = {
+                "db": "pubmed",
+                "id": pmid,
+                "retmode": "xml"
+            }
+            xml_res = requests.get(fetch_url, params=fetch_params, timeout=7)
+            if xml_res.status_code != 200:
+                continue
+
+            root = ET.fromstring(xml_res.content)
+            article = root.find(".//Article")
+            if article is None:
+                continue
+
+            title_elem = article.find("ArticleTitle")
+            title = "".join(title_elem.itertext()) if title_elem is not None else "Cardiovascular Study"
+
+            journal_elem = article.find(".//Journal/Title")
+            journal = journal_elem.text if journal_elem is not None else "PubMed"
+
+            year_elem = article.find(".//JournalIssue/PubDate/Year")
+            year = year_elem.text if year_elem is not None else "2024-2026"
+
+            # Извлекаем полный текст Abstract
+            abstract_texts = root.findall(".//Abstract/AbstractText")
+            if not abstract_texts:
+                continue
+
+            abstract = "\n".join(["".join(elem.itertext()) for elem in abstract_texts if elem is not None])
+            if len(abstract) < 100:
+                continue
+
+            return {
+                "pmid": pmid,
+                "title": title,
+                "journal": journal,
+                "year": year,
+                "abstract": abstract[:2500],  # Передаем аннотацию
+                "url": f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/"
+            }
+    except Exception as e:
+        logging.error(f"Ошибка NCBI PubMed API: {e}")
+        
+    return None
+
 def fetch_rko_news() -> dict:
-    """Парсит открытые публичные новости с сайта РКО (scardio.ru/news), доступные без регистрации."""
+    """Парсит открытые новости с сайта РКО (scardio.ru/news)."""
     try:
         url = "https://scardio.ru/news/"
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        }
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
         resp = requests.get(url, headers=headers, timeout=8)
         if resp.status_code == 200:
             soup = BeautifulSoup(resp.text, "html.parser")
@@ -133,7 +217,7 @@ def fetch_rko_news() -> dict:
                     "url": selected["url"]
                 }
     except Exception as e:
-        logging.warning(f"Ошибка получения открытых новостей РКО ({e})")
+        logging.warning(f"Ошибка получения новостей РКО: {e}")
 
     return {
         "title": "Открытые научно-клинические новости кардиологии",
@@ -141,56 +225,6 @@ def fetch_rko_news() -> dict:
         "year": "2025-2026",
         "url": "https://scardio.ru/news/"
     }
-
-def fetch_fresh_pubmed_study(query: str) -> dict:
-    """Ищет свежие статьи за 2024-2026 годы через официальный открытый NCBI Entrez API."""
-    try:
-        search_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
-        params = {
-            "db": "pubmed",
-            "term": query,
-            "mindate": "2024/01/01",
-            "maxdate": "2026/12/31",
-            "datetype": "pdat",
-            "retmax": 10,
-            "sort": "pub_date",
-            "retmode": "json"
-        }
-        res = requests.get(search_url, params=params, timeout=7)
-        data = res.json()
-        id_list = data.get("esearchresult", {}).get("idlist", [])
-        
-        if not id_list:
-            params.pop("mindate", None)
-            params.pop("maxdate", None)
-            res = requests.get(search_url, params=params, timeout=7)
-            id_list = res.json().get("esearchresult", {}).get("idlist", [])
-
-        if not id_list:
-            return None
-
-        import random
-        pmid = random.choice(id_list)
-
-        summary_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi"
-        sum_res = requests.get(summary_url, params={"db": "pubmed", "id": pmid, "retmode": "json"}, timeout=7)
-        sum_data = sum_res.json()
-        result = sum_data.get("result", {}).get(pmid, {})
-
-        title = result.get("title", "Cardiovascular Study")
-        source = result.get("source", "PubMed")
-        pubdate = result.get("pubdate", "")
-
-        return {
-            "pmid": pmid,
-            "title": title,
-            "journal": source,
-            "year": pubdate,
-            "url": f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/"
-        }
-    except Exception as e:
-        logging.error(f"Ошибка NCBI PubMed API: {e}")
-        return None
 
 def sanitize_html_for_telegram(text: str) -> str:
     allowed_tags = ['<b>', '</b>', '<i>', '</i>', '<code>', '</code>', '</a>']
@@ -242,16 +276,18 @@ async def generate_and_publish_post() -> tuple[bool, str]:
             f"В самом конце обязательно добавь хештеги: {rubric['hashtags']}"
         )
     else:
-        study = fetch_fresh_pubmed_study(rubric['query'])
+        study = fetch_pubmed_study_with_abstract(rubric['query'])
         if study:
             prompt = (
                 f"Напиши готовый пост НА РУССКОМ ЯЗЫКЕ для Telegram-канала «Липидограм» в рубрику «{rubric['category']}».\n"
-                f"Тема публикации: {rubric['ru_theme']}\n"
-                f"Реальные данные статьи из PubMed:\n"
-                f"Название: {study['title']}\n"
+                f"Тема публикации: {rubric['ru_theme']}\n\n"
+                f"СТАТЬЯ ИЗ PUBMED ДЛЯ ОСНОВЫ ПОСТА:\n"
+                f"Заголовок: {study['title']}\n"
                 f"Журнал: {study['journal']} ({study['year']})\n"
                 f"PMID: {study['pmid']}\n"
                 f"URL: {study['url']}\n\n"
+                f"АННОТАЦИЯ (ABSTRACT) СТАТЬИ:\n{study['abstract']}\n\n"
+                f"Напиши пост СТРОГО по этой аннотации. Опиши выводы ученых, методику и конкретные цифры.\n"
                 f"В блоке Первоисточник поставь ТОЧНО эту ссылку: <a href='{study['url']}'>{study['title']} / {study['journal']} (PMID: {study['pmid']})</a>.\n"
                 f"В самом конце добавь хештеги: {rubric['hashtags']}"
             )
@@ -329,11 +365,11 @@ async def generate_and_publish_post() -> tuple[bool, str]:
 # --- Хэндлеры команд ---
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
-    await message.reply("🫀 Медиа-бот «Липидограм» активен.\n\nКоманда /post_now — публикация следующего поста из контент-плана (Открытые новости РКО ➔ Рецепты ➔ Спорт ➔ Мифы ➔ Международная наука).")
+    await message.reply("🫀 Медиа-бот «Липидограм» активен.\n\nКоманда /post_now — публикация следующего поста из контент-плана (Спорт ➔ Рецепты ➔ Наука/Анализы ➔ Мифы ➔ РКО).")
 
 @dp.message(Command("post_now"))
 async def cmd_post_now(message: types.Message):
-    await message.reply("⏳ Запрашиваю свежий материал (открытые новости РКО / PubMed) и формирую пост...")
+    await message.reply("⏳ Запрашиваю исследование и его полный абстракт из PubMed/РКО и публикую в канал...")
     success, result_text = await generate_and_publish_post()
     if success:
         await message.reply("✅ " + result_text)
@@ -427,7 +463,7 @@ async def run_server():
 async def main():
     await run_server()
 
-    # График публикаций: в 10:00 и 18:30 по МСК
+    # График автопостинга: в 10:00 и 18:30 по МСК
     scheduler = AsyncIOScheduler(timezone="Europe/Moscow")
     scheduler.add_job(generate_and_publish_post, "cron", hour=10, minute=0)
     scheduler.add_job(generate_and_publish_post, "cron", hour=18, minute=30)
