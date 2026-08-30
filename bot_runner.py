@@ -2,6 +2,7 @@ import os
 import re
 import asyncio
 import logging
+import requests
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from aiohttp import web
@@ -10,6 +11,7 @@ from aiogram.enums import ChatMemberStatus
 from aiogram.filters import Command
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from google import genai
+from google.genai import types as genai_types
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -31,6 +33,7 @@ ai_client = genai.Client(api_key=GEMINI_KEY) if GEMINI_KEY else None
 dp = Dispatcher()
 user_warnings = {}
 
+# Регулярные выражения для модерации
 BAD_WORDS_PATTERN = re.compile(
     r'\b(ху[йиеяё]|пизд|бл[яе]|еб[аелиотс]|сук[аи]|муд[ао]|говно|залуп|чмо|дерьм|шлюх|гандон)\w*',
     re.IGNORECASE
@@ -41,24 +44,53 @@ SPAM_LINKS_PATTERN = re.compile(
 )
 
 CATEGORIES = [
-    "научный дайджест (свежее исследование PubMed/ESC/AHA про ЛПНП, АпоВ, триглицериды или растворимую клетчатку)",
-    "гиполипидемический кулинарный рецепт (насыщенные жиры < 2г на порцию, растворимая клетчатка > 6г, бета-глюкан/пектин)",
-    "разбор популярного ЗОЖ-мифа о холестерине, яйцах, статинах, омега-3 или чистке сосудов",
-    "кардио-тренировки и зоны пульса: как физическая активность меняет липидный профиль и сосуды"
+    "научные новости кардиологии и липидологии по гайдлайнам РКО (Российского кардиологического общества, scardio.ru) и НОА (целевые нормы ЛПНП, АпоВ, триглицериды, шкала SCORE-2)",
+    "влияние спорта и физической активности на сердце и сосуды (British Journal of Sports Medicine / ACSM / ESC: кардио 2-й пульсовой зоны, шаги, силовые нагрузки, влияние на ЛПВП и эндотелий)",
+    "гиполипидемический кулинарный рецепт для снижения ЛПНП (насыщенные жиры < 2г на порцию, растворимая клетчатка > 6г, овсяный бета-глюкан, бобовые, пектины, омега-3)",
+    "разбор популярного мифа доказательной медициной на русском языке (яйца и холестерин, статины и печень, кофе и сосуды, омега-3, чесночные чистки)",
+    "сон, стресс и биомаркеры сердца (вариабельность сердечного ритма, кортизол и их связь с липидным обменом)"
 ]
 
 SYSTEM_PROMPT = """
-Ты — главный научный редактор Telegram-канала «Липидограм» (@lipidogram).
-Твоя цель — создавать интересные, строго научно достоверные и привлекательные посты по доказательной кардиологии, нутрициологии и контролю уровня ЛПНП (холестерина).
+Ты — ведущий научный редактор русскоязычного Telegram-канала «Липидограм» (@lipidogram).
+Твоя цель — писать увлекательные, высокопрофессиональные, строго научно достоверные посты ИСКЛЮЧИТЕЛЬНО НА РУССКОМ ЯЗЫКЕ.
 
-Структура публикации:
-1. Заголовок с яркими эмодзи (в теге <b>Заголовок</b>).
-2. Суть исследования или темы простым и увлекательным языком (без сухой академической воды).
-3. Практический вывод для читателя (что съесть, как скорректировать привычки).
-4. Указание авторитетного первоисточника (например: ESC Guidelines, JACC, Circulation, The Lancet, PubMed).
-5. Тематические хештеги в конце (#Липидограм_Наука, #Рецепт_ЛПНП, #ЗдоровьеСердца).
-6. Никакой лженауки — только доказательная медицина. Форматируй строго в HTML.
+База авторитетных источников:
+1. Отечественные стандарты: РКО (Российское кардиологическое общество, scardio.ru), Российский кардиологический журнал, клинические рекомендации НОА и Минздрава РФ.
+2. Мировые кардио-ассоциации: ESC (European Society of Cardiology), AHA/ACC (Circulation, JACC), The Lancet.
+3. Доказательный спорт: British Journal of Sports Medicine (BJSM), ACSM (American College of Sports Medicine), European Journal of Preventive Cardiology.
+4. Научные рецензируемые базы: PubMed / NCBI.
+
+Правила публикации (HTML-разметка Telegram):
+• Заголовок: Яркий, интригующий, с эмодзи (в тегах <b>Заголовок</b>).
+• Введение: 1-2 предложения, почему этот вопрос важен для каждого человека и здоровья сосудов.
+• Научная суть: 3-4 четких тезиса с цифрами, процентами и фактами на понятном русском языке.
+• Практический совет: Что конкретно сделать читателю (в рационе, тренировках или контроле анализов).
+• Первоисточник: Обязательно оформи в виде кликабельной ссылки: <a href="РЕАЛЬНЫЙ_URL">Название исследования / РКО / PubMed / ESC</a>.
+• Хештеги в конце: #Липидограм_Наука #РКО #ЗдоровьеСердца #СпортИСосуды #ЛПНП.
+
+Текст должен быть живым, грамотным и доступным широкому кругу читателей, без лженауки.
 """
+
+def verify_and_fix_urls(html_text: str) -> str:
+    """Проверяет доступность ссылок в тексте (HTTP 200). Если ссылка битая, заменяет на надежный источник."""
+    urls = re.findall(r'href=["\'](https?://[^"\']+)["\']', html_text)
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+    
+    for url in urls:
+        try:
+            resp = requests.head(url, headers=headers, timeout=5, allow_redirects=True)
+            if resp.status_code >= 400:
+                # Если ссылка недоступна, заменяем на надежный портал РКО или PubMed
+                safe_fallback = "https://scardio.ru" if "scardio" in url or "rko" in url else "https://pubmed.ncbi.nlm.nih.gov"
+                html_text = html_text.replace(url, safe_fallback)
+                logging.warning(f"Ссылка {url} недоступна ({resp.status_code}). Заменена на {safe_fallback}")
+        except Exception:
+            safe_fallback = "https://pubmed.ncbi.nlm.nih.gov"
+            html_text = html_text.replace(url, safe_fallback)
+            logging.warning(f"Ошибка проверки ссылки {url}. Заменена на {safe_fallback}")
+            
+    return html_text
 
 async def generate_and_publish_post(category: str = None):
     if not ai_client:
@@ -67,40 +99,51 @@ async def generate_and_publish_post(category: str = None):
     
     import random
     selected_topic = category or random.choice(CATEGORIES)
-    logging.info(f"Генерация поста: {selected_topic}")
+    logging.info(f"Генерация поста на тему: {selected_topic}")
 
-    prompt = f"Напиши готовый для публикации пост для Telegram-канала на тему: {selected_topic}. Длина 900-1400 символов. Используй HTML-теги (<b>, <i>, <code>)."
+    prompt = (
+        f"Найди актуальную научную информацию или исследование за 2023-2026 годы и напиши готовый пост НА РУССКОМ ЯЗЫКЕ для Telegram на тему: {selected_topic}. "
+        "Длина: 900-1300 символов. Обязательно вставь прямую кликабельную ссылку на первоисточник через <a href='URL'>Источник</a>."
+    )
+
     try:
         response = ai_client.models.generate_content(
             model='gemini-2.5-flash',
             contents=prompt,
-            config=genai.types.GenerateContentConfig(
+            config=genai_types.GenerateContentConfig(
                 system_instruction=SYSTEM_PROMPT,
                 temperature=0.7,
+                tools=[genai_types.Tool(google_search=genai_types.GoogleSearch())]
             )
         )
         post_text = response.text
+        
+        # Перепроверяем работоспособность всех ссылок в тексте
+        verified_text = verify_and_fix_urls(post_text)
+
         await bot_poster.send_message(
             chat_id=CHANNEL_ID,
-            text=post_text,
+            text=verified_text,
             parse_mode="HTML",
             disable_web_page_preview=False
         )
-        logging.info("Пост успешно опубликован в канал!")
+        logging.info("Пост на русском языке со проверенными ссылками опубликован в @lipidogram!")
     except Exception as e:
-        logging.error(f"Ошибка публикации поста: {e}")
+        logging.error(f"Ошибка генерации или отправки: {e}")
+
+# --- Обработчики модератора и админ-команд ---
 
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
-    await message.reply("🛡️ Бот «Липидограм» активен и готов к работе.")
+    await message.reply("🫀 Бот «Липидограм» активен: модерация комментариев и научный AI-редактор запущены.")
 
 @dp.message(Command("post_now"))
 async def cmd_post_now(message: types.Message):
     if ADMIN_ID and message.from_user.id != ADMIN_ID:
         return
-    await message.reply("⏳ Генерирую и отправляю пост в канал...")
+    await message.reply("⏳ Ищу актуальные исследования (РКО / PubMed / ESC / BJSM) и публикую пост в канал...")
     await generate_and_publish_post()
-    await message.reply("✅ Пост успешно опубликован в канал!")
+    await message.reply("✅ Пост опубликован в канале @lipidogram!")
 
 @dp.message(F.text)
 async def handle_comment(message: types.Message):
@@ -153,11 +196,11 @@ async def handle_comment(message: types.Message):
                     until_date=until_date
                 )
                 await message.answer(
-                    f"⛔ {user_mention} получает мут на 24 часа. Предупреждение: <b>2/3</b>.",
+                    f"⛔ {user_mention} переведен в режим чтения на 24 часа. Предупреждение: <b>2/3</b>.",
                     parse_mode="HTML"
                 )
             except Exception as e:
-                logging.error(f"Ошибка мута: {e}")
+                logging.error(f"Ошибка ограничения: {e}")
         else:
             try:
                 await bot_moderator.ban_chat_member(chat_id=message.chat.id, user_id=user_id)
@@ -169,9 +212,8 @@ async def handle_comment(message: types.Message):
             except Exception as e:
                 logging.error(f"Ошибка бана: {e}")
 
-# Простой веб-сервер для бесплатного тарифа Render
 async def handle_ping(request):
-    return web.Response(text="Lipidogram Bot is healthy and running 24/7!")
+    return web.Response(text="Lipidogram Bot Service is running 24/7!")
 
 async def start_web_server():
     app = web.Application()
@@ -186,9 +228,10 @@ async def start_web_server():
 async def main():
     await start_web_server()
 
+    # График автопостинга: 10:00 (утренний дайджест РКО/исследования) и 18:30 (практика, спорт, рецепт)
     scheduler = AsyncIOScheduler(timezone="Europe/Moscow")
     scheduler.add_job(generate_and_publish_post, "cron", hour=10, minute=0)
-    scheduler.add_job(generate_and_publish_post, "cron", hour=18, minute=0)
+    scheduler.add_job(generate_and_publish_post, "cron", hour=18, minute=30)
     scheduler.start()
 
     logging.info("Службы модерации и автопостинга успешно запущены!")
