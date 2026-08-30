@@ -100,12 +100,12 @@ RUBRIC_MYTHS = {
 }
 
 RUBRIC_SPORT = {
-    "category": "🏃 СПОРТ И ЗОНА 2",
+    "category": "🏃 АКТИВНОСТЬ И ЭЛАСТИЧНОСТЬ СОСУДОВ",
     "source_type": "pubmed",
     "style_type": "practical_guide",
-    "query": '("aerobic exercise" OR "resistance training" OR "interval training") AND ("flow-mediated dilation" OR "endothelial" OR "HDL-C" OR "lipid profile") AND ("trial" OR "randomized")',
-    "ru_theme": "Простые советы по активности: пульсовая Зона 2, 8000 шагов, силовые для повышения ЛПВП и молодости артерий",
-    "hashtags": "#СпортИСосуды #ЗдоровьеСердца #Кардиотренировки #Эндотелий"
+    "query": '("aerobic exercise" OR "resistance training" OR "walking") AND ("flow-mediated dilation" OR "endothelial" OR "HDL-C" OR "lipid profile") AND ("trial" OR "randomized")',
+    "ru_theme": "Простые советы по движению: быстрая прогулка после еды, 8000 шагов в день, легкий бег в комфортном разговорном темпе без одышки, домашняя зарядка для сосудов",
+    "hashtags": "#Движение_Липидограм #ЗдоровьеСердца #Прогулки #ЭластичностьСосудов"
 }
 
 RUBRIC_ACADEMIC_SCIENCE = {
@@ -119,9 +119,17 @@ RUBRIC_ACADEMIC_SCIENCE = {
 
 SYSTEM_PROMPT = """
 Ты — главный редактор русскоязычного Telegram-канала «Липидограм» (@lipidogram).
-Твоя задача — сгенерировать JSON с двумя полями:
-1. "post_text": готовый текст поста на русском языке с Telegram HTML разметкой.
-2. "image_prompt": подробный промпт на АНГЛИЙСКОМ ЯЗЫКЕ для генерации фотореалистичной иллюстрации, СТРОГО отражающей тему и ингредиенты/суть поста.
+Твоя задача — писать доступно, живо, увлекательно, человеческим языком без непонятного профессионального сленга!
+
+КАТЕГОРИЧЕСКИЙ ЗАПРЕТ НА ЖАРГОН:
+- ЗАПРЕЩЕНО использовать непонятный термин «Зона 2» без простого житейского объяснения!
+- Вместо «Зона 2» ВСЕГДА пиши понятным языком: «комфортный разговорный темп (когда можете говорить без одышки)», «быстрая ходьба на свежем воздухе», «легкая пробежка трусцой», «прогулка на велосипеде» или «8 000–10 000 шагов в день».
+
+ВЕРНИ ОТВЕТ СТРОГО В ВИДЕ JSON:
+{
+  "post_text": "...",
+  "image_prompt": "..."
+}
 
 ТРЕБОВАНИЯ К ТЕКСТУ ПОСТА ("post_text"):
 - Объем: 600-850 символов (емко, динамично, увлекательно).
@@ -131,17 +139,10 @@ SYSTEM_PROMPT = """
 
 ТРЕБОВАНИЯ К IMAGE PROMPT ("image_prompt"):
 - На АНГЛИЙСКОМ языке.
-- Описывай конкретную сцену фото (например: "Close-up shot of fresh salmon steak with sliced avocado and chia seeds on dark slate, professional food photography, 8k, soft studio lighting" или "3D scientific visualization of healthy coronary artery and lipid molecules, high detail, medical illustration, 8k").
-
-ВЕРНИ ОТВЕТ СТРОГО В ВИДЕ JSON:
-{
-  "post_text": "...",
-  "image_prompt": "..."
-}
+- Описывай конкретную сцену фото (например: "Close-up shot of fresh salmon steak with sliced avocado and chia seeds on dark slate, professional food photography, 8k, soft studio lighting" или "A person walking briskly in a sunny green park, wearing comfortable sportswear, energetic healthy morning atmosphere, photorealistic, 8k").
 """
 
 def generate_ai_image_bytes(english_prompt: str) -> bytes:
-    """Генерирует уникальное изображение по английскому промпту и возвращает байты."""
     try:
         clean_p = re.sub(r'[\"\n\r]', ' ', english_prompt).strip()[:200]
         seed = random.randint(1000, 99999)
@@ -155,7 +156,6 @@ def generate_ai_image_bytes(english_prompt: str) -> bytes:
     except Exception as e:
         logging.warning(f"Ошибка Pollinations AI: {e}")
 
-    # Надежный резервный медицинский визуал
     try:
         backup_url = "https://images.unsplash.com/photo-1505751172876-fa1923c5c528?auto=format&fit=crop&w=1200&q=80"
         resp = requests.get(backup_url, timeout=8)
@@ -183,9 +183,8 @@ def fetch_global_youtube_video() -> dict:
             try:
                 transcript_list = YouTubeTranscriptApi.get_transcript(vid, languages=['en', 'en-US', 'ru'])
                 full_text = " ".join([t['text'] for t in transcript_list])
-                keywords = ["cholesterol", "ldl", "apob", "artery", "atherosclerosis", "heart", "diet", "zone 2", "exercise", "lipids", "statins", "omega-3", "холестерин", "сосуд", "сердц", "лпнп", "давлен", "питан", "статины", "жир", "тренировк", "спорт"]
+                keywords = ["cholesterol", "ldl", "apob", "artery", "atherosclerosis", "heart", "diet", "walking", "exercise", "lipids", "statins", "omega-3", "холестерин", "сосуд", "сердц", "лпнп", "давлен", "питан", "статины", "жир", "ходьба", "спорт"]
                 if len(full_text) > 400 and any(kw in full_text.lower() for kw in keywords):
-                    # Пробуем забрать превью ролика
                     yt_img = f"https://img.youtube.com/vi/{vid}/hqdefault.jpg"
                     img_bytes = None
                     try:
@@ -212,7 +211,7 @@ def fetch_global_youtube_video() -> dict:
         "title": f"Популярный видеоразбор о здоровье сердца и сосудов",
         "journal": f"YouTube-канал {channel['name']}",
         "year": "2025-2026",
-        "content": "Подробный разбор факторов риска, холестерина, тренировок 2-й пульсовой зоны и оптимизации питания.",
+        "content": "Подробный разбор факторов риска, холестерина, пользы ежедневных прогулок быстрым шагом и оптимизации питания.",
         "image_bytes": None,
         "url": f"https://www.youtube.com/{channel['handle']}"
     }
@@ -482,7 +481,7 @@ async def generate_and_publish_post(custom_rubric: dict = None) -> tuple[bool, s
                 f"Аннотация:\n{study['abstract']}\n\n"
                 f"В блоке Первоисточник поставь ТОЧНО эту ссылку: <a href='{study['url']}'>{study['title']} / {study['journal']} (PMID: {study['pmid']})</a>.\n"
                 f"В самом конце добавь хештеги: {rubric['hashtags']}\n\n"
-                "Сгенерируй детальный английский 'image_prompt' (для рецепта — фото блюда, для спорта — кардио/эндотелий, для мифа — точный предмет спора)."
+                "Сгенерируй детальный английский 'image_prompt' (для рецепта — фото блюда, для движения — фото прогулки/пробежки, для мифа — точный предмет спора)."
             )
         else:
             prompt = (
@@ -531,7 +530,6 @@ async def generate_and_publish_post(custom_rubric: dict = None) -> tuple[bool, s
     if not post_text:
         return False, f"Ошибка генерации: {last_error}"
 
-    # Если для YouTube нет превью или это другая рубрика — генерируем AI-картинку по точному английскому описанию
     if not img_bytes:
         if not image_prompt_en:
             image_prompt_en = f"healthy lifestyle food cardiology {rubric['category']}"
@@ -541,11 +539,9 @@ async def generate_and_publish_post(custom_rubric: dict = None) -> tuple[bool, s
     try:
         clean_html = sanitize_html_for_telegram(post_text)
 
-        # 100% ГАРАНТИЯ ОТПРАВКИ ФОТО
         if img_bytes:
             photo_file = BufferedInputFile(img_bytes, filename="lipidogram_post.jpg")
             
-            # Если подпись влезает в лимит Telegram (1024 знака)
             if len(clean_html) <= 1020:
                 sent_msg = await bot_poster.send_photo(
                     chat_id=CHANNEL_ID,
@@ -554,7 +550,6 @@ async def generate_and_publish_post(custom_rubric: dict = None) -> tuple[bool, s
                     parse_mode="HTML"
                 )
             else:
-                # Если текст длинный: отправляем фото + следом полный текст
                 await bot_poster.send_photo(chat_id=CHANNEL_ID, photo=photo_file)
                 sent_msg = await bot_poster.send_message(
                     chat_id=CHANNEL_ID,
@@ -565,7 +560,6 @@ async def generate_and_publish_post(custom_rubric: dict = None) -> tuple[bool, s
             logging.info(f"Пост успешно опубликован с визуалом! ID: {sent_msg.message_id}")
             return True, f"Опубликован пост с уникальным фото («{rubric['category']}» / стиль: {style})!"
 
-        # Fallback
         sent_msg = await bot_poster.send_message(
             chat_id=CHANNEL_ID,
             text=clean_html,
@@ -581,9 +575,9 @@ async def generate_and_publish_post(custom_rubric: dict = None) -> tuple[bool, s
 async def cmd_start(message: types.Message):
     await message.reply(
         "🫀 Медиа-бот «Липидограм» обновлен!\n\n"
-        "• 🎨 Gemini 3.7 теперь генерирует точный English Image Prompt под каждый пост.\n"
-        "• 📸 100% постов выходят с фото высокого разрешения.\n"
-        "• ✍️ Разнообразие форматов (мифы, рецепты, подкасты, гиды).\n\n"
+        "• 🏃 Человеческий язык: никаких непонятных 'Зон 2' — только комфортные прогулки, шаги и легкий бег без одышки.\n"
+        "• 🎨 Точные фотореалистичные иллюстрации под каждый пост.\n"
+        "• 🚀 Работает на Gemini 3.7 Flash.\n\n"
         "Команды:\n"
         "• /post_now — публикация по расписанию.\n"
         "• /post_youtube — видеовыжимка мировых экспертов.\n"
@@ -593,7 +587,7 @@ async def cmd_start(message: types.Message):
 
 @dp.message(Command("post_now"))
 async def cmd_post_now(message: types.Message):
-    await message.reply("⏳ Gemini 3.7 генерирует пост и создает точную AI-иллюстрацию...")
+    await message.reply("⏳ Gemini 3.7 генерирует пост простым языком и создает иллюстрацию...")
     success, res = await generate_and_publish_post()
     await message.reply("✅ " + res if success else "❌ " + res)
 
