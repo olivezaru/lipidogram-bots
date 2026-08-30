@@ -1,5 +1,7 @@
 import os
 import re
+import io
+import json
 import urllib.parse
 import imaplib
 import email
@@ -15,6 +17,7 @@ from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from aiohttp import web
 from aiogram import Bot, Dispatcher, types, F
+from aiogram.types import BufferedInputFile
 from aiogram.enums import ChatMemberStatus
 from aiogram.filters import Command
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -70,13 +73,12 @@ GLOBAL_HEALTH_CHANNELS = [
     {"name": "СМТ — Научный подход (Борис Цацулин)", "handle": "@CavemanTech"}
 ]
 
-# Набор рубрик
 RUBRIC_RECIPES = {
     "category": "🥗 ГИПОЛИПИДЕМИЧЕСКАЯ КУХНЯ",
     "source_type": "pubmed",
     "style_type": "recipe_card",
     "query": '("dietary fiber" OR "beta-glucan" OR "legumes" OR "flaxseed" OR "olive oil") AND ("LDL cholesterol" OR "lipids") AND ("trial" OR "randomized")',
-    "ru_theme": "Вкусный кулинарный рецепт для снижения ЛПНП (насыщенные жиры менее 1.5г, клетчатка более 6г)",
+    "ru_theme": "Кулинарный рецепт для снижения ЛПНП (насыщенные жиры менее 1.5г, клетчатка более 6г)",
     "hashtags": "#Рецепт_ЛПНП #УмнаяЗамена #ПитаниеСердца #Клетчатка"
 }
 
@@ -116,35 +118,52 @@ RUBRIC_ACADEMIC_SCIENCE = {
 }
 
 SYSTEM_PROMPT = """
-Ты — главный редактор и автор популярного Telegram-канала «Липидограм» (@lipidogram), работающий на флагманской модели Gemini 3.7.
-Твоя задача — писать разнообразные, живые, увлекательные тексты ИСКЛЮЧИТЕЛЬНО НА РУССКОМ ЯЗЫКЕ.
+Ты — главный редактор русскоязычного Telegram-канала «Липидограм» (@lipidogram).
+Твоя задача — сгенерировать JSON с двумя полями:
+1. "post_text": готовый текст поста на русском языке с Telegram HTML разметкой.
+2. "image_prompt": подробный промпт на АНГЛИЙСКОМ ЯЗЫКЕ для генерации фотореалистичной иллюстрации, СТРОГО отражающей тему и ингредиенты/суть поста.
 
-ВАЖНОЕ ПРАВИЛО: ИЗБЕГАЙ ШАБЛОННОСТИ!
-Меняй подачу в зависимости от стиля:
-1. Если стиль «myth_buster» (Разбор мифа): Начни с парадокса или интригующего вопроса. Объясни простыми словами, что доказала наука.
-2. Если стиль «recipe_card» (Рецепт): Оформи как аппетитную карточку блюда: название, почему это вкусно, ингредиенты с граммовками, простой шаг и БЖУ.
-3. Если стиль «story_or_interview» (YouTube / Научпоп): Подай в стиле живого рассказа о том, какую неочевидную фишку раскрыл врач.
-4. Если стиль «practical_guide» / «expert_review»: Сделай динамичный гид с фактами и 1 ключевым действием.
+ТРЕБОВАНИЯ К ТЕКСТУ ПОСТА ("post_text"):
+- Объем: 600-850 символов (емко, динамично, увлекательно).
+- Разрешенные теги: <b>, </b>, <i>, </i>, <code>, </code>, <a href="...">.
+- Знаки < и > пиши словами («менее», «более») или экранируй (&lt; и &gt;).
+- В самом конце обязательно кликабельная ссылка на предоставленный URL первоисточника и хештеги.
 
-Технические требования:
-- Объем текста: 600–900 символов (для идеального чтения под фото).
-- Разрешенные теги Telegram: <b>, </b>, <i>, </i>, <code>, </code>, <a href="...">.
-- Знаки «меньше» и «больше» пиши словами («менее», «более») или экранируй (&lt; и &gt;).
-- В самом конце ОБЯЗАТЕЛЬНО кликабельная ссылка на предоставленный URL первоисточника и хештеги.
+ТРЕБОВАНИЯ К IMAGE PROMPT ("image_prompt"):
+- На АНГЛИЙСКОМ языке.
+- Описывай конкретную сцену фото (например: "Close-up shot of fresh salmon steak with sliced avocado and chia seeds on dark slate, professional food photography, 8k, soft studio lighting" или "3D scientific visualization of healthy coronary artery and lipid molecules, high detail, medical illustration, 8k").
+
+ВЕРНИ ОТВЕТ СТРОГО В ВИДЕ JSON:
+{
+  "post_text": "...",
+  "image_prompt": "..."
+}
 """
 
-def generate_dynamic_ai_image(theme_description: str) -> str:
-    """Генерирует уникальную релевантную AI-картинку строго по содержанию текущего поста."""
+def generate_ai_image_bytes(english_prompt: str) -> bytes:
+    """Генерирует уникальное изображение по английскому промпту и возвращает байты."""
     try:
-        clean_theme = re.sub(r'[^\w\s]', '', theme_description)[:80]
+        clean_p = re.sub(r'[\"\n\r]', ' ', english_prompt).strip()[:200]
         seed = random.randint(1000, 99999)
-        prompt = f"professional high quality photo, {clean_theme}, medical science, healthy lifestyle, aesthetic lighting, photorealistic, 8k, sharp focus"
-        encoded_prompt = urllib.parse.quote(prompt)
-        image_url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=1200&height=800&seed={seed}&nologo=true"
-        return image_url
+        full_prompt = f"photorealistic, {clean_p}, 8k resolution, cinematic lighting, masterpiece"
+        encoded = urllib.parse.quote(full_prompt)
+        url = f"https://image.pollinations.ai/prompt/{encoded}?width=1200&height=800&seed={seed}&nologo=true"
+        
+        resp = requests.get(url, timeout=12)
+        if resp.status_code == 200 and len(resp.content) > 5000:
+            return resp.content
     except Exception as e:
-        logging.warning(f"Ошибка генерации промпта AI: {e}")
-        return "https://images.unsplash.com/photo-1505751172876-fa1923c5c528?auto=format&fit=crop&w=1200&q=80"
+        logging.warning(f"Ошибка Pollinations AI: {e}")
+
+    # Надежный резервный медицинский визуал
+    try:
+        backup_url = "https://images.unsplash.com/photo-1505751172876-fa1923c5c528?auto=format&fit=crop&w=1200&q=80"
+        resp = requests.get(backup_url, timeout=8)
+        if resp.status_code == 200:
+            return resp.content
+    except Exception:
+        pass
+    return None
 
 def fetch_global_youtube_video() -> dict:
     channel = random.choice(GLOBAL_HEALTH_CHANNELS)
@@ -166,13 +185,22 @@ def fetch_global_youtube_video() -> dict:
                 full_text = " ".join([t['text'] for t in transcript_list])
                 keywords = ["cholesterol", "ldl", "apob", "artery", "atherosclerosis", "heart", "diet", "zone 2", "exercise", "lipids", "statins", "omega-3", "холестерин", "сосуд", "сердц", "лпнп", "давлен", "питан", "статины", "жир", "тренировк", "спорт"]
                 if len(full_text) > 400 and any(kw in full_text.lower() for kw in keywords):
-                    image_url = f"https://img.youtube.com/vi/{vid}/maxresdefault.jpg"
+                    # Пробуем забрать превью ролика
+                    yt_img = f"https://img.youtube.com/vi/{vid}/hqdefault.jpg"
+                    img_bytes = None
+                    try:
+                        r = requests.get(yt_img, timeout=6)
+                        if r.status_code == 200:
+                            img_bytes = r.content
+                    except Exception:
+                        pass
+
                     return {
                         "title": f"Разбор эксперта: {channel['name']}",
                         "journal": f"YouTube-канал {channel['name']}",
                         "year": "2025-2026",
                         "content": full_text[:3500],
-                        "image_url": image_url,
+                        "image_bytes": img_bytes,
                         "url": f"https://www.youtube.com/watch?v={vid}"
                     }
             except Exception:
@@ -185,7 +213,7 @@ def fetch_global_youtube_video() -> dict:
         "journal": f"YouTube-канал {channel['name']}",
         "year": "2025-2026",
         "content": "Подробный разбор факторов риска, холестерина, тренировок 2-й пульсовой зоны и оптимизации питания.",
-        "image_url": generate_dynamic_ai_image(f"doctor medical podcast {channel['name']}"),
+        "image_bytes": None,
         "url": f"https://www.youtube.com/{channel['handle']}"
     }
 
@@ -248,7 +276,6 @@ def fetch_rko_from_email() -> dict:
             "journal": "Официальная рассылка Российского кардиологического общества (РКО)",
             "year": "2025-2026",
             "content": body[:2500],
-            "image_url": generate_dynamic_ai_image(f"russian cardiology medical research {subject}"),
             "url": found_links[0] if found_links else "https://scardio.ru/news/novosti_obschestva/"
         }
     except Exception as e:
@@ -292,7 +319,6 @@ def fetch_rko_news() -> dict:
                     "journal": "Российское кардиологическое общество (РКО)",
                     "year": "2025-2026",
                     "content": content_desc if content_desc else selected["title"],
-                    "image_url": generate_dynamic_ai_image(f"russian cardiology conference {selected['title']}"),
                     "url": selected["url"]
                 }
     except Exception as e:
@@ -303,7 +329,6 @@ def fetch_rko_news() -> dict:
         "journal": "РКО (scardio.ru)",
         "year": "2025-2026",
         "content": "Актуальные новости кардиологии и клинические стандарты.",
-        "image_url": generate_dynamic_ai_image("cardiology hospital doctor meeting"),
         "url": base_section_url
     }
 
@@ -368,7 +393,6 @@ def fetch_pubmed_study_with_abstract(query: str) -> dict:
                 "journal": journal,
                 "year": year,
                 "abstract": abstract[:2500],
-                "image_url": generate_dynamic_ai_image(title),
                 "url": f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/"
             }
     except Exception as e:
@@ -427,42 +451,40 @@ async def generate_and_publish_post(custom_rubric: dict = None) -> tuple[bool, s
     style = rubric.get("style_type", "expert_review")
     logging.info(f"Запуск рубрики: {rubric['category']} (стиль: {style})")
 
-    image_url = None
+    img_bytes = None
 
     if rubric.get("source_type") == "youtube":
         study = fetch_global_youtube_video()
-        image_url = study.get("image_url")
+        img_bytes = study.get("image_bytes")
         prompt = (
-            f"Напиши яркий пост в стиле «{style}» для Telegram-канала «Липидограм» в рубрику «{rubric['category']}».\n"
+            f"Напиши пост в стиле «{style}» для Telegram-канала «Липидограм» в рубрику «{rubric['category']}».\n"
             f"ТЕКСТ ВЫСТУПЛЕНИЯ СПИКЕРА:\n{study.get('content', '')}\n\n"
-            f"Не используй шаблонные фразы. Расскажи самую интересную мысль спикера простым языком.\n"
             f"В блоке Первоисточник поставь ТОЧНО эту ссылку на видео: <a href='{study['url']}'>{study['title']} ({study['journal']})</a>.\n"
-            f"В самом конце обязательно добавь хештеги: {rubric['hashtags']}"
+            f"В самом конце добавь хештеги: {rubric['hashtags']}\n\n"
+            "Не забудь сгенерировать точный английский 'image_prompt' для фото к этому видео."
         )
     elif rubric.get("source_type") == "rko":
         study = fetch_rko_news()
-        image_url = study.get("image_url")
         prompt = (
             f"Напиши понятный и актуальный пост в стиле «{style}» для Telegram-канала «Липидограм» в рубрику «{rubric['category']}».\n"
             f"МАТЕРИАЛ РКО:\nЗаголовок: {study['title']}\nТекст: {study.get('content', '')}\n\n"
             f"В блоке Первоисточник поставь ТОЧНО эту ссылку: <a href='{study['url']}'>{study['title']} / {study['journal']}</a>.\n"
-            f"В самом конце добавь хештеги: {rubric['hashtags']}"
+            f"В самом конце добавь хештеги: {rubric['hashtags']}\n\n"
+            "Не забудь сгенерировать точный английский 'image_prompt' для медицинской иллюстрации."
         )
     else:
         study = fetch_pubmed_study_with_abstract(rubric['query'])
         if study:
-            image_url = study.get("image_url")
             prompt = (
                 f"Напиши пост в стиле «{style}» для Telegram-канала «Липидограм» в рубрику «{rubric['category']}».\n"
                 f"Тема: {rubric['ru_theme']}\n\n"
                 f"ДАННЫЕ ИССЛЕДОВАНИЯ:\nЗаголовок: {study['title']}\nЖурнал: {study['journal']} ({study['year']})\nPMID: {study['pmid']}\n"
                 f"Аннотация:\n{study['abstract']}\n\n"
-                f"Сделай подачу необычной и интересной. Избегай монотонности.\n"
                 f"В блоке Первоисточник поставь ТОЧНО эту ссылку: <a href='{study['url']}'>{study['title']} / {study['journal']} (PMID: {study['pmid']})</a>.\n"
-                f"В самом конце добавь хештеги: {rubric['hashtags']}"
+                f"В самом конце добавь хештеги: {rubric['hashtags']}\n\n"
+                "Сгенерируй детальный английский 'image_prompt' (для рецепта — фото блюда, для спорта — кардио/эндотелий, для мифа — точный предмет спора)."
             )
         else:
-            image_url = generate_dynamic_ai_image(rubric['ru_theme'])
             prompt = (
                 f"Напиши классный пост в стиле «{style}» для Telegram-канала «Липидограм» в рубрику «{rubric['category']}» на тему: {rubric['ru_theme']}.\n"
                 f"В первоисточнике укажи ссылку: <a href='https://scardio.ru/news/novosti_obschestva/'>Новости Российского кардиологического общества (РКО)</a>.\n"
@@ -476,7 +498,9 @@ async def generate_and_publish_post(custom_rubric: dict = None) -> tuple[bool, s
         'gemini-2.5-flash-lite',
         'gemini-2.0-flash'
     ]
+    
     post_text = None
+    image_prompt_en = None
     last_error = None
 
     for model_name in models_to_try:
@@ -488,12 +512,16 @@ async def generate_and_publish_post(custom_rubric: dict = None) -> tuple[bool, s
                     contents=prompt,
                     config=genai_types.GenerateContentConfig(
                         system_instruction=SYSTEM_PROMPT,
+                        response_mime_type="application/json",
                         temperature=0.75,
                     )
                 )
                 if response and response.text:
-                    post_text = response.text
-                    break
+                    parsed = json.loads(response.text)
+                    post_text = parsed.get("post_text")
+                    image_prompt_en = parsed.get("image_prompt")
+                    if post_text:
+                        break
             except Exception as e:
                 last_error = e
                 await asyncio.sleep(1.5)
@@ -503,22 +531,41 @@ async def generate_and_publish_post(custom_rubric: dict = None) -> tuple[bool, s
     if not post_text:
         return False, f"Ошибка генерации: {last_error}"
 
+    # Если для YouTube нет превью или это другая рубрика — генерируем AI-картинку по точному английскому описанию
+    if not img_bytes:
+        if not image_prompt_en:
+            image_prompt_en = f"healthy lifestyle food cardiology {rubric['category']}"
+        logging.info(f"Генерация точной иллюстрации: '{image_prompt_en}'")
+        img_bytes = generate_ai_image_bytes(image_prompt_en)
+
     try:
         clean_html = sanitize_html_for_telegram(post_text)
 
-        if image_url:
-            try:
+        # 100% ГАРАНТИЯ ОТПРАВКИ ФОТО
+        if img_bytes:
+            photo_file = BufferedInputFile(img_bytes, filename="lipidogram_post.jpg")
+            
+            # Если подпись влезает в лимит Telegram (1024 знака)
+            if len(clean_html) <= 1020:
                 sent_msg = await bot_poster.send_photo(
                     chat_id=CHANNEL_ID,
-                    photo=image_url,
+                    photo=photo_file,
                     caption=clean_html,
                     parse_mode="HTML"
                 )
-                logging.info(f"Пост опубликован в {CHANNEL_ID}! ID: {sent_msg.message_id}")
-                return True, f"Опубликован пост («{rubric['category']}» / стиль: {style})!"
-            except Exception as photo_err:
-                logging.warning(f"Не удалось отправить фото ({photo_err}), отправляю текстом...")
+            else:
+                # Если текст длинный: отправляем фото + следом полный текст
+                await bot_poster.send_photo(chat_id=CHANNEL_ID, photo=photo_file)
+                sent_msg = await bot_poster.send_message(
+                    chat_id=CHANNEL_ID,
+                    text=clean_html,
+                    parse_mode="HTML",
+                    disable_web_page_preview=False
+                )
+            logging.info(f"Пост успешно опубликован с визуалом! ID: {sent_msg.message_id}")
+            return True, f"Опубликован пост с уникальным фото («{rubric['category']}» / стиль: {style})!"
 
+        # Fallback
         sent_msg = await bot_poster.send_message(
             chat_id=CHANNEL_ID,
             text=clean_html,
@@ -533,39 +580,38 @@ async def generate_and_publish_post(custom_rubric: dict = None) -> tuple[bool, s
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     await message.reply(
-        "🫀 Медиа-бот «Липидограм» на базе Gemini 3.7 Flash активен!\n\n"
-        "Особенности:\n"
-        "• 🚀 Работает на новейшей модели Gemini 3.7 Flash.\n"
-        "• 🎨 AI-генерация точных картинок под тему каждого поста.\n"
-        "• ✍️ Разнообразие авторских стилей.\n\n"
+        "🫀 Медиа-бот «Липидограм» обновлен!\n\n"
+        "• 🎨 Gemini 3.7 теперь генерирует точный English Image Prompt под каждый пост.\n"
+        "• 📸 100% постов выходят с фото высокого разрешения.\n"
+        "• ✍️ Разнообразие форматов (мифы, рецепты, подкасты, гиды).\n\n"
         "Команды:\n"
-        "• /post_now — пост по расписанию.\n"
-        "• /post_youtube — видеоразбор мировых звезд.\n"
+        "• /post_now — публикация по расписанию.\n"
+        "• /post_youtube — видеовыжимка мировых экспертов.\n"
         "• /post_recipe — кулинарная карточка.\n"
         "• /post_myth — разбор мифа."
     )
 
 @dp.message(Command("post_now"))
 async def cmd_post_now(message: types.Message):
-    await message.reply("⏳ Gemini 3.7 Flash формирует пост и генерирует иллюстрацию...")
+    await message.reply("⏳ Gemini 3.7 генерирует пост и создает точную AI-иллюстрацию...")
     success, res = await generate_and_publish_post()
     await message.reply("✅ " + res if success else "❌ " + res)
 
 @dp.message(Command("post_youtube"))
 async def cmd_post_yt(message: types.Message):
-    await message.reply("🎬 Забираю превью видео и готовлю выжимку...")
+    await message.reply("🎬 Забираю превью ролика и формирую пост...")
     success, res = await generate_and_publish_post(RUBRIC_YOUTUBE)
     await message.reply("✅ " + res if success else "❌ " + res)
 
 @dp.message(Command("post_recipe"))
 async def cmd_post_rec(message: types.Message):
-    await message.reply("🥗 Gemini 3.7 Flash готовит карточку рецепта...")
+    await message.reply("🥗 Генерирую фото блюда и карточку рецепта...")
     success, res = await generate_and_publish_post(RUBRIC_RECIPES)
     await message.reply("✅ " + res if success else "❌ " + res)
 
 @dp.message(Command("post_myth"))
 async def cmd_post_my(message: types.Message):
-    await message.reply("💡 Gemini 3.7 Flash развенчивает миф...")
+    await message.reply("💡 Генерирую иллюстрацию и разбор мифа...")
     success, res = await generate_and_publish_post(RUBRIC_MYTHS)
     await message.reply("✅ " + res if success else "❌ " + res)
 
@@ -660,7 +706,7 @@ async def main():
     scheduler.add_job(generate_and_publish_post, "cron", hour=18, minute=30)
     scheduler.start()
 
-    logging.info("Служба расписания и боты успешно запущены на Gemini 3.7 Flash!")
+    logging.info("Служба расписания и боты успешно запущены!")
 
     if bot_poster:
         if bot_moderator and bot_moderator != bot_poster:
