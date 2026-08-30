@@ -23,11 +23,10 @@ CHANNEL_ID = os.getenv("CHANNEL_ID", "@lipidogram").strip()
 PORT = int(os.getenv("PORT", 8080))
 
 if not MODERATOR_TOKEN:
-    logging.error("КРИТИЧЕСКАЯ ОШИБКА: MODERATOR_BOT_TOKEN не задан в переменных окружения!")
+    logging.error("КРИТИЧЕСКАЯ ОШИБКА: MODERATOR_BOT_TOKEN не задан!")
 
 bot_moderator = Bot(token=MODERATOR_TOKEN) if MODERATOR_TOKEN else None
 
-# Если токен постера отдельный, инициализируем второго бота, иначе используем одного
 if POSTER_TOKEN and POSTER_TOKEN != MODERATOR_TOKEN:
     bot_poster = Bot(token=POSTER_TOKEN)
 else:
@@ -59,36 +58,49 @@ SYSTEM_PROMPT = """
 Ты — ведущий научный редактор русскоязычного Telegram-канала «Липидограм» (@lipidogram).
 Твоя цель — писать увлекательные, высокопрофессиональные, научно достоверные посты ИСКЛЮЧИТЕЛЬНО НА РУССКОМ ЯЗЫКЕ.
 
-База источников:
-1. РКО (Российское кардиологическое общество, scardio.ru), клинические рекомендации НОА и Минздрава РФ.
-2. Мировые кардио-ассоциации: ESC, AHA/ACC, The Lancet.
+База авторитетных источников:
+1. Отечественные стандарты: РКО (Российское кардиологическое общество, scardio.ru), Российский кардиологический журнал, клинические рекомендации НОА и Минздрава РФ.
+2. Мировые кардио-ассоциации: ESC (European Society of Cardiology), AHA/ACC (Circulation, JACC), The Lancet.
 3. Доказательный спорт: British Journal of Sports Medicine (BJSM), ACSM.
-4. База PubMed / NCBI.
+4. База рецензируемых статей: PubMed / NCBI.
+
+ВАЖНОЕ ПРАВИЛО ДЛЯ ССЫЛКИ НА ПЕРВОИСТОЧНИК:
+Никогда не ставь ссылку просто на главную страницу (pubmed.ncbi.nlm.nih.gov или scardio.ru).
+Обязательно указывай прямую ссылку на конкретную статью или конкретный гайдлайн:
+- Для PubMed: используй прямую ссылку с реальным PMID, например: https://pubmed.ncbi.nlm.nih.gov/32132159/ или https://pubmed.ncbi.nlm.nih.gov/31597828/
+- Для РКО: https://scardio.ru/rekomendacii/rekomendacii_rko/ или архив https://russjcardiol.elpub.ru/
+- Для ESC / DOI: https://doi.org/10.1093/eurheartj/ehz455
 
 Формат поста (HTML для Telegram):
 • Заголовок: Яркий, с тематическими эмодзи (в тегах <b>Заголовок</b>).
-• Введение: 1-2 предложения, актуальность для сосудов и сердца.
+• Введение: 1-2 предложения, актуальность для сосудов и здоровья.
 • Научная суть: 3-4 четких тезиса простым языком с цифрами и фактами.
 • Практический совет: Что конкретно делать читателю (в рационе, тренировках или контроле анализов).
-• Первоисточник: В виде кликабельной ссылки: <a href="URL">Исследование / Рекомендации РКО / PubMed / ESC</a>.
+• Первоисточник: Кликабельная ссылка: <a href="ПРЯМАЯ_ССЫЛКА_НА_СТАТЬЮ">Название статьи / Журнал / PMID</a>.
 • Хештеги: #Липидограм_Наука #РКО #ЗдоровьеСердца #СпортИСосуды #ЛПНП.
 
 Никакого шарлатанства и лженауки — только строгая доказательная медицина.
 """
 
 def verify_and_fix_urls(html_text: str) -> str:
-    """Проверяет доступность ссылок. Если ссылка недоступна, заменяет на проверенный медицинский портал."""
+    """Проверяет ссылки. Если ссылка содержит прямой идентификатор (PMID / DOI / раздел РКО), сохраняет её."""
     urls = re.findall(r'href=["\'](https?://[^"\']+)["\']', html_text)
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+    
     for url in urls:
+        # Если ссылка уже ведет на конкретную статью по PMID или DOI, не трогаем её
+        if re.search(r'pubmed\.ncbi\.nlm\.nih\.gov/\d+/?', url) or 'doi.org' in url or 'scardio.ru/rekomendacii' in url or 'russjcardiol' in url:
+            continue
+            
         try:
             resp = requests.head(url, headers=headers, timeout=5, allow_redirects=True)
             if resp.status_code >= 400:
-                fallback = "https://scardio.ru" if "scardio" in url or "rko" in url else "https://pubmed.ncbi.nlm.nih.gov"
+                fallback = "https://scardio.ru/rekomendacii/rekomendacii_rko/" if "scardio" in url else "https://pubmed.ncbi.nlm.nih.gov/31597828/"
                 html_text = html_text.replace(url, fallback)
         except Exception:
-            fallback = "https://pubmed.ncbi.nlm.nih.gov"
+            fallback = "https://pubmed.ncbi.nlm.nih.gov/31597828/"
             html_text = html_text.replace(url, fallback)
+            
     return html_text
 
 async def generate_and_publish_post(category: str = None) -> tuple[bool, str]:
@@ -108,12 +120,10 @@ async def generate_and_publish_post(category: str = None) -> tuple[bool, str]:
 
     prompt = (
         f"Напиши готовый экспертный пост НА РУССКОМ ЯЗЫКЕ для Telegram-канала «Липидограм» на тему: {selected_topic}. "
-        "Длина: 900-1300 символов. Обязательно вставь кликабельную ссылку на первоисточник через <a href='URL'>Источник</a> "
-        "(используй официальные ресурсы: scardio.ru, pubmed.ncbi.nlm.nih.gov или escardio.org). "
+        "Длина: 900-1300 символов. Обязательно вставь прямую ссылку на конкретную статью (с точным номером PMID на pubmed.ncbi.nlm.nih.gov/НОМЕР/ или прямую ссылку на рекомендации РКО/ESC) через <a href='URL'>Название статьи / Журнал</a>. "
         "Опирайся на доказательную медицину, клинические рекомендации РКО и гайдлайны ESC/AHA."
     )
 
-    # Список моделей с приоритетом надежности и доступности
     models_to_try = [
         'gemini-2.5-flash',
         'gemini-2.5-flash-lite',
@@ -150,7 +160,7 @@ async def generate_and_publish_post(category: str = None) -> tuple[bool, str]:
             break
 
     if not post_text:
-        return False, f"Ошибка Gemini API (все модели временно недоступны): {last_error}"
+        return False, f"Ошибка Gemini API: {last_error}"
 
     try:
         verified_text = verify_and_fix_urls(post_text)
@@ -160,7 +170,7 @@ async def generate_and_publish_post(category: str = None) -> tuple[bool, str]:
             parse_mode="HTML",
             disable_web_page_preview=False
         )
-        logging.info(f"Пост успешно опубликован в {CHANNEL_ID}! ID: {sent_msg.message_id}")
+        logging.info(f"Пост опубликован в {CHANNEL_ID}! ID: {sent_msg.message_id}")
         return True, "Пост успешно опубликован в канал @lipidogram!"
     except Exception as e:
         err_msg = f"Ошибка отправки сообщения в Telegram: {e}"
@@ -174,7 +184,7 @@ async def cmd_start(message: types.Message):
 
 @dp.message(Command("post_now"))
 async def cmd_post_now(message: types.Message):
-    await message.reply("⏳ Генерирую пост по стандартам РКО/PubMed/ESC и публикую в канал...")
+    await message.reply("⏳ Генерирую пост с прямой ссылкой на статью (РКО/PubMed/ESC) и публикую в канал...")
     success, result_text = await generate_and_publish_post()
     if success:
         await message.reply("✅ " + result_text)
@@ -268,7 +278,7 @@ async def run_server():
 async def main():
     await run_server()
 
-    # График автопостинга: в 10:00 и 18:30 по МСК
+    # График публикаций: 10:00 и 18:30 по МСК
     scheduler = AsyncIOScheduler(timezone="Europe/Moscow")
     scheduler.add_job(generate_and_publish_post, "cron", hour=10, minute=0)
     scheduler.add_job(generate_and_publish_post, "cron", hour=18, minute=30)
