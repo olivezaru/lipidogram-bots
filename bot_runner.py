@@ -17,23 +17,23 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
 MODERATOR_TOKEN = os.getenv("MODERATOR_BOT_TOKEN")
-POSTER_TOKEN = os.getenv("POSTER_BOT_TOKEN", MODERATOR_TOKEN)
+POSTER_TOKEN = os.getenv("POSTER_BOT_TOKEN")
 GEMINI_KEY = os.getenv("GEMINI_API_KEY")
-CHANNEL_ID = os.getenv("CHANNEL_ID", "@lipidogram")
-ADMIN_ID = int(os.getenv("ADMIN_USER_ID", "0"))
+CHANNEL_ID = os.getenv("CHANNEL_ID", "@lipidogram").strip()
 PORT = int(os.getenv("PORT", 8080))
 
 if not MODERATOR_TOKEN:
-    raise ValueError("MODERATOR_BOT_TOKEN не задан!")
+    raise ValueError("MODERATOR_BOT_TOKEN не задан в переменных окружения!")
 
+# Инициализируем ботов
 bot_moderator = Bot(token=MODERATOR_TOKEN)
 bot_poster = Bot(token=POSTER_TOKEN) if POSTER_TOKEN else bot_moderator
 ai_client = genai.Client(api_key=GEMINI_KEY) if GEMINI_KEY else None
 
-dp = Dispatcher()
+dp_moderator = Dispatcher()
+dp_poster = Dispatcher()
 user_warnings = {}
 
-# Регулярные выражения для модерации
 BAD_WORDS_PATTERN = re.compile(
     r'\b(ху[йиеяё]|пизд|бл[яе]|еб[аелиотс]|сук[аи]|муд[ао]|говно|залуп|чмо|дерьм|шлюх|гандон)\w*',
     re.IGNORECASE
@@ -73,7 +73,6 @@ SYSTEM_PROMPT = """
 """
 
 def verify_and_fix_urls(html_text: str) -> str:
-    """Проверяет доступность ссылок в тексте (HTTP 200). Если ссылка битая, заменяет на надежный источник."""
     urls = re.findall(r'href=["\'](https?://[^"\']+)["\']', html_text)
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
     
@@ -81,25 +80,24 @@ def verify_and_fix_urls(html_text: str) -> str:
         try:
             resp = requests.head(url, headers=headers, timeout=5, allow_redirects=True)
             if resp.status_code >= 400:
-                # Если ссылка недоступна, заменяем на надежный портал РКО или PubMed
                 safe_fallback = "https://scardio.ru" if "scardio" in url or "rko" in url else "https://pubmed.ncbi.nlm.nih.gov"
                 html_text = html_text.replace(url, safe_fallback)
-                logging.warning(f"Ссылка {url} недоступна ({resp.status_code}). Заменена на {safe_fallback}")
+                logging.warning(f"Ссылка {url} заменена на {safe_fallback}")
         except Exception:
             safe_fallback = "https://pubmed.ncbi.nlm.nih.gov"
             html_text = html_text.replace(url, safe_fallback)
-            logging.warning(f"Ошибка проверки ссылки {url}. Заменена на {safe_fallback}")
             
     return html_text
 
-async def generate_and_publish_post(category: str = None):
+async def generate_and_publish_post(category: str = None) -> tuple[bool, str]:
     if not ai_client:
-        logging.warning("GEMINI_API_KEY не установлен, генерация пропущена.")
-        return
+        err = "GEMINI_API_KEY не установлен!"
+        logging.error(err)
+        return False, err
     
     import random
     selected_topic = category or random.choice(CATEGORIES)
-    logging.info(f"Генерация поста на тему: {selected_topic}")
+    logging.info(f"Генерация поста: {selected_topic}")
 
     prompt = (
         f"Найди актуальную научную информацию или исследование за 2023-2026 годы и напиши готовый пост НА РУССКОМ ЯЗЫКЕ для Telegram на тему: {selected_topic}. "
@@ -117,36 +115,46 @@ async def generate_and_publish_post(category: str = None):
             )
         )
         post_text = response.text
-        
-        # Перепроверяем работоспособность всех ссылок в тексте
         verified_text = verify_and_fix_urls(post_text)
 
-        await bot_poster.send_message(
+        # Публикуем в канал через bot_poster
+        sent_msg = await bot_poster.send_message(
             chat_id=CHANNEL_ID,
             text=verified_text,
             parse_mode="HTML",
             disable_web_page_preview=False
         )
-        logging.info("Пост на русском языке со проверенными ссылками опубликован в @lipidogram!")
+        logging.info(f"Пост успешно опубликован в {CHANNEL_ID}! ID сообщения: {sent_msg.message_id}")
+        return True, "Пост успешно опубликован в канал!"
     except Exception as e:
-        logging.error(f"Ошибка генерации или отправки: {e}")
+        err_msg = f"Ошибка публикации в канал: {e}"
+        logging.error(err_msg)
+        return False, err_msg
 
-# --- Обработчики модератора и админ-команд ---
+# --- Обработчики команд для ОБОИХ ботов ---
 
-@dp.message(Command("start"))
-async def cmd_start(message: types.Message):
-    await message.reply("🫀 Бот «Липидограм» активен: модерация комментариев и научный AI-редактор запущены.")
+async def handle_start(message: types.Message):
+    await message.reply("🫀 Бот «Липидограм» активен.\n\nОтправьте команду /post_now для немедленной публикации поста в канал!")
 
-@dp.message(Command("post_now"))
-async def cmd_post_now(message: types.Message):
-    if ADMIN_ID and message.from_user.id != ADMIN_ID:
-        return
-    await message.reply("⏳ Ищу актуальные исследования (РКО / PubMed / ESC / BJSM) и публикую пост в канал...")
-    await generate_and_publish_post()
-    await message.reply("✅ Пост опубликован в канале @lipidogram!")
+async def handle_post_now(message: types.Message):
+    await message.reply("⏳ Начинаю генерацию поста (РКО / PubMed / ESC) и отправку в канал...")
+    success, result_text = await generate_and_publish_post()
+    if success:
+        await message.reply("✅ " + result_text)
+    else:
+        await message.reply("❌ Не удалось опубликовать пост:\n" + result_text)
 
-@dp.message(F.text)
+# Регистрируем команды на обоих ботах
+dp_poster.message.register(handle_start, Command("start"))
+dp_poster.message.register(handle_post_now, Command("post_now"))
+dp_moderator.message.register(handle_start, Command("start"))
+dp_moderator.message.register(handle_post_now, Command("post_now"))
+
+# --- Модерация комментариев ---
+@dp_moderator.message(F.text)
 async def handle_comment(message: types.Message):
+    if message.chat.type == "private":
+        return
     if message.sender_chat and message.sender_chat.type == "channel":
         return
 
@@ -228,14 +236,19 @@ async def start_web_server():
 async def main():
     await start_web_server()
 
-    # График автопостинга: 10:00 (утренний дайджест РКО/исследования) и 18:30 (практика, спорт, рецепт)
+    # График публикаций: в 10:00 и 18:30 МСК
     scheduler = AsyncIOScheduler(timezone="Europe/Moscow")
     scheduler.add_job(generate_and_publish_post, "cron", hour=10, minute=0)
     scheduler.add_job(generate_and_publish_post, "cron", hour=18, minute=30)
     scheduler.start()
 
-    logging.info("Службы модерации и автопостинга успешно запущены!")
-    await dp.start_polling(bot_moderator)
+    logging.info("Оба бота (Медиа и Модератор) успешно запущены в режиме Polling!")
+    
+    # Запускаем опрос обоих ботов одновременно
+    await asyncio.gather(
+        dp_moderator.start_polling(bot_moderator),
+        dp_poster.start_polling(bot_poster)
+    )
 
 if __name__ == "__main__":
     asyncio.run(main())
