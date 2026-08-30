@@ -66,17 +66,20 @@ SYSTEM_PROMPT = """
 4. База PubMed / NCBI.
 
 Формат поста (HTML для Telegram):
-• Заголовок: Яркий, с эмодзи (в тегах <b>Заголовок</b>).
+• Заголовок: Яркий, с тематическими эмодзи (в тегах <b>Заголовок</b>).
 • Введение: 1-2 предложения, актуальность для сосудов и сердца.
-• Научная суть: 3-4 четких тезиса простым языком с цифрами.
-• Практический совет: Что конкретно делать читателю.
-• Первоисточник: В виде кликабельной ссылки: <a href="URL">Исследование / Рекомендации РКО / PubMed</a>.
+• Научная суть: 3-4 четких тезиса простым языком с цифрами и фактами.
+• Практический совет: Что конкретно делать читателю (в рационе, тренировках или контроле анализов).
+• Первоисточник: В виде кликабельной ссылки: <a href="URL">Исследование / Рекомендации РКО / PubMed / ESC</a>.
 • Хештеги: #Липидограм_Наука #РКО #ЗдоровьеСердца #СпортИСосуды #ЛПНП.
+
+Никакого шарлатанства и лженауки — только строгая доказательная медицина.
 """
 
 def verify_and_fix_urls(html_text: str) -> str:
+    """Проверяет доступность ссылок. Если ссылка недоступна, заменяет на проверенный медицинский портал."""
     urls = re.findall(r'href=["\'](https?://[^"\']+)["\']', html_text)
-    headers = {"User-Agent": "Mozilla/5.0"}
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
     for url in urls:
         try:
             resp = requests.head(url, headers=headers, timeout=5, allow_redirects=True)
@@ -106,32 +109,48 @@ async def generate_and_publish_post(category: str = None) -> tuple[bool, str]:
     prompt = (
         f"Напиши готовый экспертный пост НА РУССКОМ ЯЗЫКЕ для Telegram-канала «Липидограм» на тему: {selected_topic}. "
         "Длина: 900-1300 символов. Обязательно вставь кликабельную ссылку на первоисточник через <a href='URL'>Источник</a> "
-        "(используй официальные ресурсы: scardio.ru, pubmed.ncbi.nlm.nih.gov или escardio.org)."
+        "(используй официальные ресурсы: scardio.ru, pubmed.ncbi.nlm.nih.gov или escardio.org). "
+        "Опирайся на доказательную медицину, клинические рекомендации РКО и гайдлайны ESC/AHA."
     )
 
-    models_to_try = ['gemini-3.6-flash', 'gemini-3.7-flash']
+    # Список моделей с приоритетом надежности и доступности
+    models_to_try = [
+        'gemini-2.5-flash',
+        'gemini-2.5-flash-lite',
+        'gemini-2.0-flash',
+        'gemini-3.6-flash',
+        'gemini-3.7-flash'
+    ]
+    
     post_text = None
     last_error = None
 
     for model_name in models_to_try:
-        try:
-            response = ai_client.models.generate_content(
-                model=model_name,
-                contents=prompt,
-                config=genai_types.GenerateContentConfig(
-                    system_instruction=SYSTEM_PROMPT,
-                    temperature=0.7,
+        for attempt in range(2):
+            try:
+                logging.info(f"Запрос к модели {model_name} (попытка {attempt+1})...")
+                response = ai_client.models.generate_content(
+                    model=model_name,
+                    contents=prompt,
+                    config=genai_types.GenerateContentConfig(
+                        system_instruction=SYSTEM_PROMPT,
+                        temperature=0.7,
+                    )
                 )
-            )
-            if response and response.text:
-                post_text = response.text
-                break
-        except Exception as e:
-            last_error = e
-            logging.warning(f"Модель {model_name} вернула ошибку: {e}")
+                if response and response.text:
+                    post_text = response.text
+                    logging.info(f"Успешная генерация с моделью: {model_name}")
+                    break
+            except Exception as e:
+                last_error = e
+                logging.warning(f"Модель {model_name} (попытка {attempt+1}) вернула ошибку: {e}")
+                await asyncio.sleep(2)
+                
+        if post_text:
+            break
 
     if not post_text:
-        return False, f"Ошибка Gemini API: {last_error}"
+        return False, f"Ошибка Gemini API (все модели временно недоступны): {last_error}"
 
     try:
         verified_text = verify_and_fix_urls(post_text)
@@ -141,7 +160,7 @@ async def generate_and_publish_post(category: str = None) -> tuple[bool, str]:
             parse_mode="HTML",
             disable_web_page_preview=False
         )
-        logging.info(f"Пост опубликован в {CHANNEL_ID}! ID: {sent_msg.message_id}")
+        logging.info(f"Пост успешно опубликован в {CHANNEL_ID}! ID: {sent_msg.message_id}")
         return True, "Пост успешно опубликован в канал @lipidogram!"
     except Exception as e:
         err_msg = f"Ошибка отправки сообщения в Telegram: {e}"
@@ -151,11 +170,11 @@ async def generate_and_publish_post(category: str = None) -> tuple[bool, str]:
 # --- Хэндлеры команд ---
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
-    await message.reply("🫀 Бот «Липидограм» активен.\n\nОтправьте команду /post_now для немедленной публикации поста в канал!")
+    await message.reply("🫀 Бот «Липидограм» активен.\n\nОтправьте команду /post_now для немедленной генерации и публикации поста в канал!")
 
 @dp.message(Command("post_now"))
 async def cmd_post_now(message: types.Message):
-    await message.reply("⏳ Генерирую пост по стандартам РКО/PubMed и публикую в канал...")
+    await message.reply("⏳ Генерирую пост по стандартам РКО/PubMed/ESC и публикую в канал...")
     success, result_text = await generate_and_publish_post()
     if success:
         await message.reply("✅ " + result_text)
@@ -249,7 +268,7 @@ async def run_server():
 async def main():
     await run_server()
 
-    # Расписание публикаций (10:00 и 18:30 МСК)
+    # График автопостинга: в 10:00 и 18:30 по МСК
     scheduler = AsyncIOScheduler(timezone="Europe/Moscow")
     scheduler.add_job(generate_and_publish_post, "cron", hour=10, minute=0)
     scheduler.add_job(generate_and_publish_post, "cron", hour=18, minute=30)
@@ -257,9 +276,7 @@ async def main():
 
     logging.info("Служба расписания и бот запущены!")
 
-    # Запускаем polling для постера (или модератора)
     if bot_poster:
-        # Если есть отдельный бот-модератор, опрашиваем параллельно
         if bot_moderator and bot_moderator != bot_poster:
             await asyncio.gather(
                 dp.start_polling(bot_poster),
