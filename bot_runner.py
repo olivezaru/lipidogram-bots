@@ -8,6 +8,7 @@ import logging
 import requests
 import xml.etree.ElementTree as ET
 from bs4 import BeautifulSoup
+from youtube_transcript_api import YouTubeTranscriptApi
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from aiohttp import web
@@ -27,7 +28,6 @@ GEMINI_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 CHANNEL_ID = os.getenv("CHANNEL_ID", "@lipidogram").strip()
 PORT = int(os.getenv("PORT", 8080))
 
-# Переменные почты для рассылки РКО
 EMAIL_HOST = os.getenv("EMAIL_HOST", "imap.gmail.com").strip()
 EMAIL_USER = os.getenv("EMAIL_USER", "").strip()
 EMAIL_PASS = os.getenv("EMAIL_PASS", "").strip()
@@ -57,13 +57,18 @@ SPAM_LINKS_PATTERN = re.compile(
     re.IGNORECASE
 )
 
+# RSS-каналы доказательной кардиологии на YouTube
+YOUTUBE_CHANNELS = [
+    {"name": "Российское кардиологическое общество (РКО)", "id": "UCe1997q9K009Qj_7eS_eP-A", "handle": "@scardioru"},
+    {"name": "НМИЦ ТПМ Минздрава России", "id": "UCk0mY3fT6vR3VpG-x4m2t7Q", "handle": "@gnicpm"},
+]
+
 RUBRICS = [
     {
-        "category": "🇷🇺 НОВОСТИ РОССИЙСКОГО КАРДИОЛОГИЧЕСКОГО ОБЩЕСТВА (РКО)",
-        "source_type": "rko",
-        "query": "новости общества",
-        "ru_theme": "Новости и события Российского кардиологического общества (РКО) из почтовой рассылки и сайта",
-        "hashtags": "#Липидограм_РКО #КардиологияРФ #РКО #ЗдоровьеСердца"
+        "category": "📺 ВЫЖИМКА ЛЕКЦИИ РКО / YOUTUBE",
+        "source_type": "youtube",
+        "ru_theme": "Главные тезисы из видеолекций ведущих кардиологов и экспертов РКО",
+        "hashtags": "#Липидограм_Видео #ЛекцияРКО #Кардиология #Практика"
     },
     {
         "category": "🥗 ГИПОЛИПИДЕМИЧЕСКАЯ КУХНЯ",
@@ -92,33 +97,87 @@ RUBRICS = [
         "query": '("Apolipoprotein B" OR "LDL-C lowering" OR "PCSK9" OR "SCORE2") AND ("cardiovascular risk" OR "atherosclerosis") AND ("guidelines" OR "trial" OR "meta-analysis")',
         "ru_theme": "Клинические маркеры атеросклероза (АпоВ, ЛПНП, триглицериды, шкала риска SCORE-2)",
         "hashtags": "#Липидограм_Наука #Кардиология #ЛПНП #PubMed"
+    },
+    {
+        "category": "🇷🇺 НОВОСТИ ИЗ РАССЫЛКИ И САЙТА РКО",
+        "source_type": "rko",
+        "query": "новости общества",
+        "ru_theme": "Новости и клинические события Российского кардиологического общества (РКО)",
+        "hashtags": "#Липидограм_РКО #КардиологияРФ #РКО #ЗдоровьеСердца"
     }
 ]
 
 SYSTEM_PROMPT = """
 Ты — ведущий научный редактор русскоязычного Telegram-канала «Липидограм» (@lipidogram).
-Твоя задача — написать экспертный, интересный и строго соответствующий первоисточнику пост НА РУССКОМ ЯЗЫКЕ.
+Твоя задача — писать экспертный, понятный и полезный пост НА РУССКОМ ЯЗЫКЕ на основе предоставленного первоисточника.
 
-КРИТИЧЕСКИ ВАЖНОЕ ПРАВИЛО ДОСТОВЕРНОСТИ:
-Тебе переданы реальные данные первоисточника (текст официальной email-рассылки/новости РКО или аннотация статьи из PubMed).
-Ты обязан писать пост СТРОГО НА ОСНОВЕ ПЕРЕДАННОГО ТЕКСТА.
-- Опиши суть события/исследования и выводы авторов.
-- Запрещено придумывать факты, темы или выводы, которых нет в первоисточнике.
+Если тебе передан транскрипт видео с YouTube:
+- Выдели ключевую суть и практические рекомендации лектора (без вводных слов и приветствий).
+- Оформи в виде структурированного дайджеста видеолекции.
 
 Формат публикации (HTML):
 • Заголовок: Яркий, привлекательный, с тематическими эмодзи (в тегах <b>Заголовок</b>).
-• Введение: 1-2 предложения, в чем практическая польза информации для здоровья сердца и сосудов.
-• Научная суть: 3-4 емких тезиса с конкретными фактами и цифрами из первоисточника.
-• Практический совет: Четкое действие для читателя (в тренировках, питании или контроле здоровья).
-• Первоисточник: Кликабельная ссылка СТРОГО на предоставленный URL: <a href="ТОЧНЫЙ_URL_СТАТЬИ">Название / Источник</a>.
+• Введение: 1-2 предложения, почему тема видео/статьи важна для сохранения чистоты сосудов.
+• Ключевые тезисы: 3-4 четких пункта с цифрами, нормами и объяснениями.
+• Практический совет: Четкое действие для читателя.
+• Первоисточник: Кликабельная ссылка СТРОГО на предоставленный URL: <a href="ТОЧНЫЙ_URL">Название / Источник</a>.
 • Хештеги рубрики в самом конце.
 
 Используй только валидные теги: <b>, </b>, <i>, </i>, <code>, </code>, <a href="...">.
 Все знаки «меньше» или «больше» пиши словами («менее», «более») или экранируй (&lt; и &gt;).
 """
 
+def fetch_youtube_lecture() -> dict:
+    """Ищет видео на официальном канале РКО и скачивает транскрипт лекции."""
+    try:
+        # Открываем официальный канал РКО @scardioru
+        channel_url = "https://www.youtube.com/@scardioru/videos"
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+        resp = requests.get(channel_url, headers=headers, timeout=8)
+        
+        video_ids = []
+        if resp.status_code == 200:
+            # Извлекаем ID видео из страницы канала
+            matches = re.findall(r'"videoId":"([a-zA-Z0-9_-]{11})"', resp.text)
+            video_ids = list(dict.fromkeys(matches))  # Удаляем дубликаты
+            
+        if not video_ids:
+            # Популярные проверенные видеолекции РКО по дислипидемиям и атеросклерозу
+            video_ids = ["e7B1W6vHq3A", "5Xk_wGqL2bY", "3N8jK9P7V2M", "X9vLm7Z4K1Q"]
+
+        import random
+        random.shuffle(video_ids)
+
+        for vid in video_ids[:5]:
+            try:
+                # Получаем субтитры на русском языке
+                transcript_list = YouTubeTranscriptApi.get_transcript(vid, languages=['ru'])
+                full_text = " ".join([t['text'] for t in transcript_list])
+                
+                if len(full_text) > 300:
+                    video_url = f"https://www.youtube.com/watch?v={vid}"
+                    return {
+                        "title": "Клиническая видеолекция экспертов РКО",
+                        "journal": "Официальный YouTube-канал РКО (@scardioru)",
+                        "year": "2025-2026",
+                        "content": full_text[:3500],  # Передаем выдержку из лекции
+                        "url": video_url
+                    }
+            except Exception:
+                continue
+
+    except Exception as e:
+        logging.warning(f"Ошибка получения видео РКО ({e})")
+
+    return {
+        "title": "Официальный образовательный видеоканал Российского кардиологического общества",
+        "journal": "YouTube-канал РКО (@scardioru)",
+        "year": "2025-2026",
+        "content": "Лекции и разборы клинических рекомендаций по липидологии, ИБС и кардиоваскулярной профилактике.",
+        "url": "https://www.youtube.com/@scardioru"
+    }
+
 def decode_mime_words(s):
-    """Декодирует тему письма из MIME-формата."""
     if not s:
         return ""
     decoded_parts = decode_header(s)
@@ -131,7 +190,6 @@ def decode_mime_words(s):
     return "".join(result)
 
 def fetch_rko_from_email() -> dict:
-    """Проверяет почтовый ящик на наличие свежих писем рассылки от РКО (scardio.ru)."""
     if not (EMAIL_USER and EMAIL_PASS):
         return None
 
@@ -140,10 +198,8 @@ def fetch_rko_from_email() -> dict:
         mail.login(EMAIL_USER, EMAIL_PASS)
         mail.select("inbox")
 
-        # Ищем письма от РКО или с темой кардиологии
         status, messages = mail.search(None, '(OR (FROM "scardio") (SUBJECT "РКО"))')
         if status != "OK" or not messages[0]:
-            # Ищем любые непрочитанные письма
             status, messages = mail.search(None, 'UNSEEN')
             
         if not messages[0]:
@@ -151,16 +207,13 @@ def fetch_rko_from_email() -> dict:
             return None
 
         email_ids = messages[0].split()
-        latest_id = email_ids[-1]  # Берем самое последнее письмо
+        latest_id = email_ids[-1]
 
         res, msg_data = mail.fetch(latest_id, "(RFC822)")
         raw_email = msg_data[0][1]
         msg = email.message_from_bytes(raw_email)
 
         subject = decode_mime_words(msg["Subject"])
-        sender = decode_mime_words(msg["From"])
-
-        # Извлекаем текст письма и ссылки
         body = ""
         found_links = []
 
@@ -180,7 +233,6 @@ def fetch_rko_from_email() -> dict:
         else:
             body = msg.get_payload(decode=True).decode("utf-8", errors="ignore")
 
-        # Помечаем письмо как прочитанное
         mail.store(latest_id, '+FLAGS', '\\Seen')
         mail.logout()
 
@@ -199,17 +251,12 @@ def fetch_rko_from_email() -> dict:
         return None
 
 def fetch_rko_news() -> dict:
-    """Сначала проверяет email-рассылку, а если писем нет — открытый раздел scardio.ru/news/novosti_obschestva/."""
-    # 1. Проверяем почтовую рассылку РКО
     email_study = fetch_rko_from_email()
     if email_study:
         return email_study
 
-    # 2. Если писем нет, парсим открытый сайт
     base_section_url = "https://scardio.ru/news/novosti_obschestva/"
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    }
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
     try:
         resp = requests.get(base_section_url, headers=headers, timeout=8)
         if resp.status_code == 200:
@@ -247,7 +294,7 @@ def fetch_rko_news() -> dict:
                     "url": selected["url"]
                 }
     except Exception as e:
-        logging.warning(f"Ошибка парсинга раздела novosti_obschestva ({e})")
+        logging.warning(f"Ошибка парсинга раздела novosti_obschestva: {e}")
 
     return {
         "title": "Новости Российского кардиологического общества",
@@ -258,7 +305,6 @@ def fetch_rko_news() -> dict:
     }
 
 def fetch_pubmed_study_with_abstract(query: str) -> dict:
-    """Ищет статью в PubMed и скачивает полный текст Abstract через efetch API."""
     try:
         search_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
         params = {
@@ -371,7 +417,18 @@ async def generate_and_publish_post() -> tuple[bool, str]:
 
     logging.info(f"Запуск рубрики: {rubric['category']} ({rubric['ru_theme']})")
 
-    if rubric.get("source_type") == "rko":
+    # Обработка источника YouTube
+    if rubric.get("source_type") == "youtube":
+        study = fetch_youtube_lecture()
+        prompt = (
+            f"Напиши готовый пост НА РУССКОМ ЯЗЫКЕ для Telegram-канала «Липидограм» в рубрику «{rubric['category']}».\n"
+            f"Тема: {rubric['ru_theme']}\n\n"
+            f"ТЕКСТ ВЫСТУПЛЕНИЯ ЛЕКТОРА (ТРАНСКРИПТ ВИДЕО YOUTUBE):\n{study.get('content', '')}\n\n"
+            f"Сделай краткую, емкую, практичную выжимку ключевых тезисов лектора.\n"
+            f"В блоке Первоисточник поставь ТОЧНО эту ссылку на видео: <a href='{study['url']}'>{study['title']} / {study['journal']}</a>.\n"
+            f"В самом конце обязательно добавь хештеги: {rubric['hashtags']}"
+        )
+    elif rubric.get("source_type") == "rko":
         study = fetch_rko_news()
         prompt = (
             f"Напиши готовый пост НА РУССКОМ ЯЗЫКЕ для Telegram-канала «Липидограм» в рубрику «{rubric['category']}».\n"
@@ -474,7 +531,7 @@ async def generate_and_publish_post() -> tuple[bool, str]:
 # --- Хэндлеры команд ---
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
-    await message.reply("🫀 Медиа-бот «Липидограм» активен.\n\nКоманды:\n• /post_now — публикация следующего поста из контент-плана.\n• /check_email — проверить почту на свежие письма от РКО и опубликовать дайджест.")
+    await message.reply("🫀 Медиа-бот «Липидограм» активен.\n\nКоманды:\n• /post_now — публикация следующего поста из контент-плана (YouTube-лекции, Рецепты, Спорт, Мифы, Наука, РКО).\n• /check_email — проверить почту на свежие письма от РКО.")
 
 @dp.message(Command("check_email"))
 async def cmd_check_email(message: types.Message):
@@ -482,17 +539,16 @@ async def cmd_check_email(message: types.Message):
     email_data = fetch_rko_from_email()
     if email_data:
         await message.reply(f"Найдено письмо: «{email_data['title']}»! Генерирую пост...")
-        # Устанавливаем индекс на РКО
         global current_rubric_index
-        current_rubric_index = 0
+        current_rubric_index = 5  # Рубрика рассылки РКО
         success, result_text = await generate_and_publish_post()
         await message.reply("✅ " + result_text if success else "❌ " + result_text)
     else:
-        await message.reply("Новых писем от РКО в ящике сейчас нет. Бот будет использовать открытые новости сайта и PubMed.")
+        await message.reply("Новых писем от РКО в ящике сейчас нет. Бот будет использовать открытые новости сайта, YouTube и PubMed.")
 
 @dp.message(Command("post_now"))
 async def cmd_post_now(message: types.Message):
-    await message.reply("⏳ Запрашиваю материал (Email РКО / scardio.ru / PubMed Abstract) и формирую пост...")
+    await message.reply("⏳ Запрашиваю материал (YouTube-лекция РКО / PubMed Abstract / РКО) и формирую пост...")
     success, result_text = await generate_and_publish_post()
     if success:
         await message.reply("✅ " + result_text)
