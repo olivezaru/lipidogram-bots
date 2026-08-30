@@ -1,9 +1,9 @@
 import os
 import re
-import html
 import asyncio
 import logging
 import requests
+from bs4 import BeautifulSoup
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from aiohttp import web
@@ -37,6 +37,7 @@ ai_client = genai.Client(api_key=GEMINI_KEY) if GEMINI_KEY else None
 
 dp = Dispatcher()
 user_warnings = {}
+current_rubric_index = 0
 
 BAD_WORDS_PATTERN = re.compile(
     r'\b(ху[йиеяё]|пизд|бл[яе]|еб[аелиотс]|сук[аи]|муд[ао]|говно|залуп|чмо|дерьм|шлюх|гандон)\w*',
@@ -47,51 +48,150 @@ SPAM_LINKS_PATTERN = re.compile(
     re.IGNORECASE
 )
 
-CATEGORIES = [
-    "научные новости кардиологии и липидологии по гайдлайнам РКО (Российского кардиологического общества, scardio.ru) и НОА (целевые нормы ЛПНП, АпоВ, триглицериды, шкала SCORE-2)",
-    "влияние спорта и физической активности на сердце и сосуды (British Journal of Sports Medicine / ACSM / ESC: кардио 2-й пульсовой зоны, шаги, силовые нагрузки, влияние на ЛПВП и эндотелий)",
-    "гиполипидемический кулинарный рецепт для снижения ЛПНП (насыщенные жиры менее 2г на порцию, растворимая клетчатка более 6г, овсяный бета-глюкан, бобовые, пектины, омега-3)",
-    "разбор популярного мифа доказательной медициной на русском языке (яйца и холестерин, статины и печень, кофе и сосуды, омега-3, чесночные чистки)",
-    "сон, стресс и биомаркеры сердца (вариабельность сердечного ритма, кортизол и их связь с липидным обменом)"
+# 5 строго чередующихся рубрик (включая российские новости РКО и международный PubMed)
+RUBRICS = [
+    {
+        "category": "🇷🇺 НОВОСТИ РКО И РОССИЙСКОЙ КАРДИОЛОГИИ",
+        "source_type": "rko",
+        "query": "липиды холестерин атеросклероз",
+        "ru_theme": "Клинические новости и статьи Российского кардиологического общества (РКО) и журнала РКЖ",
+        "hashtags": "#Липидограм_РКО #КардиологияРФ #РКО #ЗдоровьеСердца"
+    },
+    {
+        "category": "🥗 ГИПОЛИПИДЕМИЧЕСКАЯ КУХНЯ",
+        "source_type": "pubmed",
+        "query": "(soluble dietary fiber OR beta-glucan OR Mediterranean diet) AND (cholesterol OR lipid profile)",
+        "ru_theme": "Кулинарный гиполипидемический рецепт (насыщенные жиры менее 2г, растворимая клетчатка более 6г, овес, бобовые, омега-3)",
+        "hashtags": "#Рецепт_ЛПНП #УмнаяЗамена #ПитаниеСердца #Клетчатка"
+    },
+    {
+        "category": "🏃 СПОРТ И СОСУДЫ (2025-2026)",
+        "source_type": "pubmed",
+        "query": "(Zone 2 aerobic exercise OR resistance training) AND (endothelial function OR HDL-C OR cardiovascular risk)",
+        "ru_theme": "Спорт и сосуды: кардио во 2-й пульсовой зоне, силовые тренировки, шаги и их влияние на ЛПВП и эндотелий",
+        "hashtags": "#СпортИСосуды #ЗдоровьеСердца #ПульсовыеЗоны #Кардио"
+    },
+    {
+        "category": "💡 РАЗБОР МИФОВ ДОКАЗАТЕЛЬНОЙ МЕДИЦИНОЙ",
+        "source_type": "pubmed",
+        "query": "(dietary cholesterol OR eggs OR statins safety OR omega-3) AND (systematic review OR trial)",
+        "ru_theme": "Разбор популярного мифа (яйца и холестерин, статины и печень, кофе и сосуды, чистки сосудов)",
+        "hashtags": "#Мифы_Липидограм #Доказательно #Холестерин"
+    },
+    {
+        "category": "🔬 МЕЖДУНАРОДНЫЙ НАУЧНЫЙ ДАЙДЖЕСТ",
+        "source_type": "pubmed",
+        "query": "(LDL-C OR Apolipoprotein B OR atherosclerosis) AND (meta-analysis OR clinical trial)",
+        "ru_theme": "Свежие международные мета-анализы липидологии (ЛПНП, АпоВ, триглицериды, шкала SCORE-2)",
+        "hashtags": "#Липидограм_Наука #Кардиология #ЛПНП #PubMed"
+    }
 ]
 
 SYSTEM_PROMPT = """
 Ты — ведущий научный редактор русскоязычного Telegram-канала «Липидограм» (@lipidogram).
-Твоя цель — писать увлекательные, высокопрофессиональные, научно достоверные посты ИСКЛЮЧИТЕЛЬНО НА РУССКОМ ЯЗЫКЕ.
+Твоя задача — писать увлекательные, кристально понятные, профессиональные посты ИСКЛЮЧИТЕЛЬНО НА РУССКОМ ЯЗЫКЕ.
 
-База авторитетных источников:
-1. Отечественные стандарты: РКО (Российское кардиологическое общество, scardio.ru), Российский кардиологический журнал, клинические рекомендации НОА и Минздрава РФ.
-2. Мировые кардио-ассоциации: ESC (European Society of Cardiology), AHA/ACC (Circulation, JACC), The Lancet.
-3. Доказательный спорт: British Journal of Sports Medicine (BJSM), ACSM.
-4. База рецензируемых статей: PubMed / NCBI.
+Правила публикации:
+1. Заголовок: Яркий, привлекательный, с тематическими эмодзи (в тегах <b>Заголовок</b>).
+2. Введение: 1-2 предложения, почему тема важна для здоровья сердца, сосудов и долголетия.
+3. Научная суть: 3-4 емких тезиса с фактами, цифрами (граммами, процентами) на понятном русском языке.
+4. Практический совет: Четкое действие для читателя (в тарелке, на тренировке или в лаборатории).
+5. Первоисточник: Кликабельная ссылка СТРОГО на предоставленный реальный URL: <a href="ТОЧНЫЙ_URL_СТАТЬИ">Название исследования / Журнал / Источник</a>.
+6. Хештеги рубрики в самом конце.
 
-ВАЖНЫЕ ПРАВИЛА ОФОРМЛЕНИЯ И ССЫЛОК:
-1. Используй ТОЛЬКО следующие HTML-теги: <b>, </b>, <i>, </i>, <code>, </code>, <a href="URL">текст</a>.
-2. Если пишешь знаки «меньше» или «больше» (например: менее 1.4 ммоль/л или более 6г), пиши их словами («менее», «более») или экранируй, чтобы не ломать HTML.
-3. Обязательно указывай прямую ссылку на конкретную статью или гайдлайн:
-- Для PubMed: прямая ссылка с реальным PMID: https://pubmed.ncbi.nlm.nih.gov/32132159/ или https://pubmed.ncbi.nlm.nih.gov/31597828/
-- Для РКО: https://scardio.ru/rekomendacii/rekomendacii_rko/ или архив https://russjcardiol.elpub.ru/
-- Для ESC / DOI: https://doi.org/10.1093/eurheartj/ehz455
-
-Формат поста:
-• Заголовок: Яркий, с тематическими эмодзи (в тегах <b>Заголовок</b>).
-• Введение: 1-2 предложения, актуальность для сосудов и здоровья.
-• Научная суть: 3-4 четких тезиса простым языком с цифрами и фактами.
-• Практический совет: Что конкретно делать читателю.
-• Первоисточник: Кликабельная ссылка: <a href="ПРЯМАЯ_ССЫЛКА_НА_СТАТЬЮ">Название статьи / Журнал / PMID</a>.
-• Хештеги: #Липидограм_Наука #РКО #ЗдоровьеСердца #СпортИСосуды #ЛПНП.
-
-Никакого шарлатанства и лженауки — только строгая доказательная медицина.
+Используй только валидные теги Telegram: <b>, </b>, <i>, </i>, <code>, </code>, <a href="...">.
+Все знаки «меньше» или «больше» пиши словами («менее», «более») или экранируй, чтобы не ломать HTML-разметку.
 """
 
+def fetch_rko_news() -> dict:
+    """Парсит свежие новости и статьи с официального портала РКО (scardio.ru)."""
+    try:
+        url = "https://scardio.ru/news/"
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+        resp = requests.get(url, headers=headers, timeout=8)
+        if resp.status_code == 200:
+            soup = BeautifulSoup(resp.text, "html.parser")
+            # Ищем новостные карточки на scardio.ru
+            news_items = soup.find_all("a", href=re.compile(r"/news/.*"))
+            valid_news = []
+            for item in news_items:
+                title = item.get_text(strip=True)
+                href = item.get("href", "")
+                if len(title) > 20 and not href.endswith("/news/"):
+                    full_link = f"https://scardio.ru{href}" if href.startswith("/") else href
+                    valid_news.append({"title": title, "url": full_link})
+            
+            if valid_news:
+                import random
+                selected = random.choice(valid_news[:8])
+                return {
+                    "title": selected["title"],
+                    "journal": "Российское кардиологическое общество (scardio.ru)",
+                    "year": "2025-2026",
+                    "url": selected["url"]
+                }
+    except Exception as e:
+        logging.warning(f"Парсинг РКО не удался ({e}), используем раздел клинических рекомендаций.")
+        
+    return {
+        "title": "Клинические рекомендации по нарушениям липидного обмена и профилактике",
+        "journal": "Российское кардиологическое общество (РКО / НОА)",
+        "year": "2025-2026",
+        "url": "https://scardio.ru/rekomendacii/rekomendacii_rko/"
+    }
+
+def fetch_fresh_pubmed_study(query: str) -> dict:
+    """Ищет свежие статьи за 2024-2026 годы через официальный открытый NCBI Entrez API."""
+    try:
+        search_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
+        params = {
+            "db": "pubmed",
+            "term": query,
+            "mindate": "2024/01/01",
+            "maxdate": "2026/12/31",
+            "datetype": "pdat",
+            "retmax": 10,
+            "sort": "pub_date",
+            "retmode": "json"
+        }
+        res = requests.get(search_url, params=params, timeout=7)
+        data = res.json()
+        id_list = data.get("esearchresult", {}).get("idlist", [])
+        
+        if not id_list:
+            params.pop("mindate", None)
+            params.pop("maxdate", None)
+            res = requests.get(search_url, params=params, timeout=7)
+            id_list = res.json().get("esearchresult", {}).get("idlist", [])
+
+        if not id_list:
+            return None
+
+        import random
+        pmid = random.choice(id_list)
+
+        summary_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi"
+        sum_res = requests.get(summary_url, params={"db": "pubmed", "id": pmid, "retmode": "json"}, timeout=7)
+        sum_data = sum_res.json()
+        result = sum_data.get("result", {}).get(pmid, {})
+
+        title = result.get("title", "Cardiovascular Study")
+        source = result.get("source", "PubMed")
+        pubdate = result.get("pubdate", "")
+
+        return {
+            "pmid": pmid,
+            "title": title,
+            "journal": source,
+            "year": pubdate,
+            "url": f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/"
+        }
+    except Exception as e:
+        logging.error(f"Ошибка NCBI PubMed API: {e}")
+        return None
+
 def sanitize_html_for_telegram(text: str) -> str:
-    """Безопасно экранирует невалидные символы, сохраняя разрешенные теги Telegram."""
-    # Сохраняем ссылки и теги
-    # Заменяем случайные медицинские знаки < и >, которые не являются частью валидных тегов
-    # Защищаем <a href="...">, </a>, <b>, </b>, <i>, </i>, <code>, </code>
     allowed_tags = ['<b>', '</b>', '<i>', '</i>', '<code>', '</code>', '</a>']
-    
-    # Временно маскируем валидные теги
     placeholders = {}
     
     def repl_tag(match):
@@ -99,63 +199,68 @@ def sanitize_html_for_telegram(text: str) -> str:
         placeholders[key] = match.group(0)
         return key
     
-    # Маскируем <a href="...">
     text = re.sub(r'<a\s+href=["\'][^"\']+["\']>', repl_tag, text, flags=re.IGNORECASE)
-    
-    # Маскируем остальные валидные теги
     for tag in allowed_tags:
-        pattern = re.escape(tag)
-        text = re.sub(pattern, repl_tag, text, flags=re.IGNORECASE)
+        text = re.sub(re.escape(tag), repl_tag, text, flags=re.IGNORECASE)
     
-    # Все оставшиеся < и > экранируем
     text = text.replace('<', '&lt;').replace('>', '&gt;')
     
-    # Возвращаем валидные теги обратно
     for key, val in placeholders.items():
         text = text.replace(key, val)
         
     return text
 
-def verify_and_fix_urls(html_text: str) -> str:
-    """Проверяет ссылки. Если ссылка содержит прямой идентификатор (PMID / DOI / раздел РКО), сохраняет её."""
-    urls = re.findall(r'href=["\'](https?://[^"\']+)["\']', html_text)
-    headers = {"User-Agent": "Mozilla/5.0"}
-    
-    for url in urls:
-        if re.search(r'pubmed\.ncbi\.nlm\.nih\.gov/\d+/?', url) or 'doi.org' in url or 'scardio.ru/rekomendacii' in url or 'russjcardiol' in url:
-            continue
-            
-        try:
-            resp = requests.head(url, headers=headers, timeout=5, allow_redirects=True)
-            if resp.status_code >= 400:
-                fallback = "https://scardio.ru/rekomendacii/rekomendacii_rko/" if "scardio" in url else "https://pubmed.ncbi.nlm.nih.gov/31597828/"
-                html_text = html_text.replace(url, fallback)
-        except Exception:
-            fallback = "https://pubmed.ncbi.nlm.nih.gov/31597828/"
-            html_text = html_text.replace(url, fallback)
-            
-    return html_text
+async def generate_and_publish_post() -> tuple[bool, str]:
+    global current_rubric_index
 
-async def generate_and_publish_post(category: str = None) -> tuple[bool, str]:
     if not ai_client:
         err = "GEMINI_API_KEY не установлен в переменных Render!"
         logging.error(err)
         return False, err
 
     if not bot_poster:
-        err = "Бот для отправки не настроен (проверьте токены)!"
+        err = "Бот для отправки не настроен!"
         logging.error(err)
         return False, err
-    
-    import random
-    selected_topic = category or random.choice(CATEGORIES)
-    logging.info(f"Генерация поста: {selected_topic}")
 
-    prompt = (
-        f"Напиши готовый экспертный пост НА РУССКОМ ЯЗЫКЕ для Telegram-канала «Липидограм» на тему: {selected_topic}. "
-        "Длина: 900-1300 символов. Обязательно вставь прямую ссылку на конкретную статью (с точным номером PMID на pubmed.ncbi.nlm.nih.gov/НОМЕР/ или прямую ссылку на рекомендации РКО/ESC) через <a href='URL'>Название статьи / Журнал</a>. "
-        "Опирайся на доказательную медицину, клинические рекомендации РКО и гайдлайны ESC/AHA."
-    )
+    rubric = RUBRICS[current_rubric_index]
+    current_rubric_index = (current_rubric_index + 1) % len(RUBRICS)
+
+    logging.info(f"Запуск рубрики: {rubric['category']} ({rubric['ru_theme']})")
+
+    # Получаем статью: если рубрика РКО — берем с scardio.ru, иначе из PubMed API
+    if rubric.get("source_type") == "rko":
+        study = fetch_rko_news()
+        prompt = (
+            f"Напиши готовый пост НА РУССКОМ ЯЗЫКЕ для Telegram-канала «Липидограм» в рубрику «{rubric['category']}».\n"
+            f"Тема: {rubric['ru_theme']}\n"
+            f"Российский первоисточник: {study['title']}\n"
+            f"Организация/Журнал: {study['journal']} ({study['year']})\n"
+            f"Ссылка на материал: {study['url']}\n\n"
+            f"В блоке Первоисточник поставь ТОЧНО эту ссылку: <a href='{study['url']}'>{study['title']} / {study['journal']}</a>.\n"
+            f"В самом конце обязательно добавь хештеги: {rubric['hashtags']}"
+        )
+    else:
+        study = fetch_fresh_pubmed_study(rubric['query'])
+        if study:
+            prompt = (
+                f"Напиши готовый пост НА РУССКОМ ЯЗЫКЕ для Telegram-канала «Липидограм» в рубрику «{rubric['category']}».\n"
+                f"Тема публикации: {rubric['ru_theme']}\n"
+                f"Реальные данные статьи из PubMed:\n"
+                f"Название: {study['title']}\n"
+                f"Журнал: {study['journal']} ({study['year']})\n"
+                f"PMID: {study['pmid']}\n"
+                f"URL: {study['url']}\n\n"
+                f"В блоке Первоисточник поставь ТОЧНО эту ссылку: <a href='{study['url']}'>{study['title']} / {study['journal']} (PMID: {study['pmid']})</a>.\n"
+                f"В самом конце добавь хештеги: {rubric['hashtags']}"
+            )
+        else:
+            prompt = (
+                f"Напиши готовый пост НА РУССКОМ ЯЗЫКЕ для Telegram-канала «Липидограм» в рубрику «{rubric['category']}» на тему: {rubric['ru_theme']}.\n"
+                "Опирайся на доказательную медицину и клинические рекомендации РКО/ESC.\n"
+                "В первоисточнике укажи ссылку на рекомендации РКО: <a href='https://scardio.ru/rekomendacii/rekomendacii_rko/'>Рекомендации Российского кардиологического общества (РКО)</a>.\n"
+                f"В самом конце добавь хештеги: {rubric['hashtags']}"
+            )
 
     models_to_try = [
         'gemini-2.5-flash',
@@ -182,24 +287,20 @@ async def generate_and_publish_post(category: str = None) -> tuple[bool, str]:
                 )
                 if response and response.text:
                     post_text = response.text
-                    logging.info(f"Успешная генерация с моделью: {model_name}")
                     break
             except Exception as e:
                 last_error = e
-                logging.warning(f"Модель {model_name} (попытка {attempt+1}) вернула ошибку: {e}")
-                await asyncio.sleep(2)
+                logging.warning(f"Модель {model_name} вернула: {e}")
+                await asyncio.sleep(1.5)
                 
         if post_text:
             break
 
     if not post_text:
-        return False, f"Ошибка Gemini API: {last_error}"
+        return False, f"Ошибка генерации: {last_error}"
 
     try:
-        # 1. Проверяем валидность ссылок
-        verified_text = verify_and_fix_urls(post_text)
-        # 2. Очищаем и защищаем HTML для Telegram
-        clean_html = sanitize_html_for_telegram(verified_text)
+        clean_html = sanitize_html_for_telegram(post_text)
 
         try:
             sent_msg = await bot_poster.send_message(
@@ -209,35 +310,34 @@ async def generate_and_publish_post(category: str = None) -> tuple[bool, str]:
                 disable_web_page_preview=False
             )
         except Exception as html_err:
-            logging.warning(f"Ошибка HTML-разметки ({html_err}), отправка в чистом текстовом виде...")
-            # Если разметка всё равно вызвала сбой, отправляем как чистый текст
-            raw_text = re.sub(r'<[^>]+>', '', verified_text)
+            logging.warning(f"HTML error ({html_err}), sending plain text...")
+            raw_text = re.sub(r'<[^>]+>', '', post_text)
             sent_msg = await bot_poster.send_message(
                 chat_id=CHANNEL_ID,
                 text=raw_text,
                 disable_web_page_preview=False
             )
 
-        logging.info(f"Пост опубликован в {CHANNEL_ID}! ID: {sent_msg.message_id}")
-        return True, "Пост успешно опубликован в канал @lipidogram!"
+        logging.info(f"Пост рубрики «{rubric['category']}» опубликован в {CHANNEL_ID}! ID: {sent_msg.message_id}")
+        return True, f"Опубликован пост рубрики «{rubric['category']}»!"
     except Exception as e:
-        err_msg = f"Ошибка отправки сообщения в Telegram: {e}"
+        err_msg = f"Ошибка отправки: {e}"
         logging.error(err_msg)
         return False, err_msg
 
 # --- Хэндлеры команд ---
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
-    await message.reply("🫀 Бот «Липидограм» активен.\n\nОтправьте команду /post_now для немедленной генерации и публикации поста в канал!")
+    await message.reply("🫀 Медиа-бот «Липидограм» активен.\n\nКоманда /post_now — публикация следующего поста из контент-плана (РКО ➔ Рецепты ➔ Спорт ➔ Мифы ➔ Международная наука).")
 
 @dp.message(Command("post_now"))
 async def cmd_post_now(message: types.Message):
-    await message.reply("⏳ Генерирую пост с прямой ссылкой на статью (РКО/PubMed/ESC) и публикую в канал...")
+    await message.reply("⏳ Запрашиваю свежий материал (РКО / PubMed) и формирую пост...")
     success, result_text = await generate_and_publish_post()
     if success:
         await message.reply("✅ " + result_text)
     else:
-        await message.reply("❌ Не удалось опубликовать пост:\n" + result_text)
+        await message.reply("❌ Ошибка:\n" + result_text)
 
 # --- Модерация комментариев ---
 @dp.message(F.text)
@@ -326,13 +426,13 @@ async def run_server():
 async def main():
     await run_server()
 
-    # График публикаций: 10:00 и 18:30 по МСК
+    # График автопостинга: в 10:00 и 18:30 по МСК
     scheduler = AsyncIOScheduler(timezone="Europe/Moscow")
     scheduler.add_job(generate_and_publish_post, "cron", hour=10, minute=0)
     scheduler.add_job(generate_and_publish_post, "cron", hour=18, minute=30)
     scheduler.start()
 
-    logging.info("Служба расписания и бот запущены!")
+    logging.info("Служба расписания и боты запущены!")
 
     if bot_poster:
         if bot_moderator and bot_moderator != bot_poster:
