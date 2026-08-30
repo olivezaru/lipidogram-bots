@@ -4,6 +4,7 @@ import asyncio
 import logging
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
+from aiohttp import web
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.enums import ChatMemberStatus
 from aiogram.filters import Command
@@ -13,17 +14,16 @@ from google import genai
 load_dotenv()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
-# Настройки из переменных окружения
 MODERATOR_TOKEN = os.getenv("MODERATOR_BOT_TOKEN")
 POSTER_TOKEN = os.getenv("POSTER_BOT_TOKEN", MODERATOR_TOKEN)
 GEMINI_KEY = os.getenv("GEMINI_API_KEY")
 CHANNEL_ID = os.getenv("CHANNEL_ID", "@lipidogram")
 ADMIN_ID = int(os.getenv("ADMIN_USER_ID", "0"))
+PORT = int(os.getenv("PORT", 8080))
 
 if not MODERATOR_TOKEN:
-    raise ValueError("MODERATOR_BOT_TOKEN не задан в переменных окружения!")
+    raise ValueError("MODERATOR_BOT_TOKEN не задан!")
 
-# Инициализация ботов и ИИ
 bot_moderator = Bot(token=MODERATOR_TOKEN)
 bot_poster = Bot(token=POSTER_TOKEN) if POSTER_TOKEN else bot_moderator
 ai_client = genai.Client(api_key=GEMINI_KEY) if GEMINI_KEY else None
@@ -31,7 +31,6 @@ ai_client = genai.Client(api_key=GEMINI_KEY) if GEMINI_KEY else None
 dp = Dispatcher()
 user_warnings = {}
 
-# Регулярные выражения для фильтрации комментариев
 BAD_WORDS_PATTERN = re.compile(
     r'\b(ху[йиеяё]|пизд|бл[яе]|еб[аелиотс]|сук[аи]|муд[ао]|говно|залуп|чмо|дерьм|шлюх|гандон)\w*',
     re.IGNORECASE
@@ -68,7 +67,7 @@ async def generate_and_publish_post(category: str = None):
     
     import random
     selected_topic = category or random.choice(CATEGORIES)
-    logging.info(f"Генерация поста на тему: {selected_topic}")
+    logging.info(f"Генерация поста: {selected_topic}")
 
     prompt = f"Напиши готовый для публикации пост для Telegram-канала на тему: {selected_topic}. Длина 900-1400 символов. Используй HTML-теги (<b>, <i>, <code>)."
     try:
@@ -89,13 +88,11 @@ async def generate_and_publish_post(category: str = None):
         )
         logging.info("Пост успешно опубликован в канал!")
     except Exception as e:
-        logging.error(f"Ошибка при генерации или отправке поста: {e}")
-
-# --- Обработчики команд и модерации ---
+        logging.error(f"Ошибка публикации поста: {e}")
 
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
-    await message.reply("🛡️ Бот-модератор «Липидограм» активен и готов защищать комментарии.")
+    await message.reply("🛡️ Бот «Липидограм» активен и готов к работе.")
 
 @dp.message(Command("post_now"))
 async def cmd_post_now(message: types.Message):
@@ -103,15 +100,13 @@ async def cmd_post_now(message: types.Message):
         return
     await message.reply("⏳ Генерирую и отправляю пост в канал...")
     await generate_and_publish_post()
-    await message.reply("✅ Пост успешно опубликован!")
+    await message.reply("✅ Пост успешно опубликован в канал!")
 
 @dp.message(F.text)
 async def handle_comment(message: types.Message):
-    # Игнорируем посты самого канала
     if message.sender_chat and message.sender_chat.type == "channel":
         return
 
-    # Игнорируем администраторов группы
     try:
         chat_member = await bot_moderator.get_chat_member(message.chat.id, message.from_user.id)
         if chat_member.status in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR]:
@@ -137,7 +132,7 @@ async def handle_comment(message: types.Message):
         try:
             await message.delete()
         except Exception as e:
-            logging.error(f"Не удалось удалить сообщение: {e}")
+            logging.error(f"Ошибка удаления: {e}")
 
         warnings = user_warnings.get(user_id, 0) + 1
         user_warnings[user_id] = warnings
@@ -174,8 +169,23 @@ async def handle_comment(message: types.Message):
             except Exception as e:
                 logging.error(f"Ошибка бана: {e}")
 
+# Простой веб-сервер для бесплатного тарифа Render
+async def handle_ping(request):
+    return web.Response(text="Lipidogram Bot is healthy and running 24/7!")
+
+async def start_web_server():
+    app = web.Application()
+    app.router.add_get("/", handle_ping)
+    app.router.add_get("/health", handle_ping)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", PORT)
+    await site.start()
+    logging.info(f"Веб-сервер запущен на порту {PORT}")
+
 async def main():
-    # Настройка планировщика автопостинга (в 10:00 и 18:00 по МСК)
+    await start_web_server()
+
     scheduler = AsyncIOScheduler(timezone="Europe/Moscow")
     scheduler.add_job(generate_and_publish_post, "cron", hour=10, minute=0)
     scheduler.add_job(generate_and_publish_post, "cron", hour=18, minute=0)
