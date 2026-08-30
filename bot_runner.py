@@ -1,5 +1,6 @@
 import os
 import re
+import html
 import asyncio
 import logging
 import requests
@@ -49,7 +50,7 @@ SPAM_LINKS_PATTERN = re.compile(
 CATEGORIES = [
     "научные новости кардиологии и липидологии по гайдлайнам РКО (Российского кардиологического общества, scardio.ru) и НОА (целевые нормы ЛПНП, АпоВ, триглицериды, шкала SCORE-2)",
     "влияние спорта и физической активности на сердце и сосуды (British Journal of Sports Medicine / ACSM / ESC: кардио 2-й пульсовой зоны, шаги, силовые нагрузки, влияние на ЛПВП и эндотелий)",
-    "гиполипидемический кулинарный рецепт для снижения ЛПНП (насыщенные жиры < 2г на порцию, растворимая клетчатка > 6г, овсяный бета-глюкан, бобовые, пектины, омега-3)",
+    "гиполипидемический кулинарный рецепт для снижения ЛПНП (насыщенные жиры менее 2г на порцию, растворимая клетчатка более 6г, овсяный бета-глюкан, бобовые, пектины, омега-3)",
     "разбор популярного мифа доказательной медициной на русском языке (яйца и холестерин, статины и печень, кофе и сосуды, омега-3, чесночные чистки)",
     "сон, стресс и биомаркеры сердца (вариабельность сердечного ритма, кортизол и их связь с липидным обменом)"
 ]
@@ -64,31 +65,63 @@ SYSTEM_PROMPT = """
 3. Доказательный спорт: British Journal of Sports Medicine (BJSM), ACSM.
 4. База рецензируемых статей: PubMed / NCBI.
 
-ВАЖНОЕ ПРАВИЛО ДЛЯ ССЫЛКИ НА ПЕРВОИСТОЧНИК:
-Никогда не ставь ссылку просто на главную страницу (pubmed.ncbi.nlm.nih.gov или scardio.ru).
-Обязательно указывай прямую ссылку на конкретную статью или конкретный гайдлайн:
-- Для PubMed: используй прямую ссылку с реальным PMID, например: https://pubmed.ncbi.nlm.nih.gov/32132159/ или https://pubmed.ncbi.nlm.nih.gov/31597828/
+ВАЖНЫЕ ПРАВИЛА ОФОРМЛЕНИЯ И ССЫЛОК:
+1. Используй ТОЛЬКО следующие HTML-теги: <b>, </b>, <i>, </i>, <code>, </code>, <a href="URL">текст</a>.
+2. Если пишешь знаки «меньше» или «больше» (например: менее 1.4 ммоль/л или более 6г), пиши их словами («менее», «более») или экранируй, чтобы не ломать HTML.
+3. Обязательно указывай прямую ссылку на конкретную статью или гайдлайн:
+- Для PubMed: прямая ссылка с реальным PMID: https://pubmed.ncbi.nlm.nih.gov/32132159/ или https://pubmed.ncbi.nlm.nih.gov/31597828/
 - Для РКО: https://scardio.ru/rekomendacii/rekomendacii_rko/ или архив https://russjcardiol.elpub.ru/
 - Для ESC / DOI: https://doi.org/10.1093/eurheartj/ehz455
 
-Формат поста (HTML для Telegram):
+Формат поста:
 • Заголовок: Яркий, с тематическими эмодзи (в тегах <b>Заголовок</b>).
 • Введение: 1-2 предложения, актуальность для сосудов и здоровья.
 • Научная суть: 3-4 четких тезиса простым языком с цифрами и фактами.
-• Практический совет: Что конкретно делать читателю (в рационе, тренировках или контроле анализов).
+• Практический совет: Что конкретно делать читателю.
 • Первоисточник: Кликабельная ссылка: <a href="ПРЯМАЯ_ССЫЛКА_НА_СТАТЬЮ">Название статьи / Журнал / PMID</a>.
 • Хештеги: #Липидограм_Наука #РКО #ЗдоровьеСердца #СпортИСосуды #ЛПНП.
 
 Никакого шарлатанства и лженауки — только строгая доказательная медицина.
 """
 
+def sanitize_html_for_telegram(text: str) -> str:
+    """Безопасно экранирует невалидные символы, сохраняя разрешенные теги Telegram."""
+    # Сохраняем ссылки и теги
+    # Заменяем случайные медицинские знаки < и >, которые не являются частью валидных тегов
+    # Защищаем <a href="...">, </a>, <b>, </b>, <i>, </i>, <code>, </code>
+    allowed_tags = ['<b>', '</b>', '<i>', '</i>', '<code>', '</code>', '</a>']
+    
+    # Временно маскируем валидные теги
+    placeholders = {}
+    
+    def repl_tag(match):
+        key = f"__TAG_{len(placeholders)}__"
+        placeholders[key] = match.group(0)
+        return key
+    
+    # Маскируем <a href="...">
+    text = re.sub(r'<a\s+href=["\'][^"\']+["\']>', repl_tag, text, flags=re.IGNORECASE)
+    
+    # Маскируем остальные валидные теги
+    for tag in allowed_tags:
+        pattern = re.escape(tag)
+        text = re.sub(pattern, repl_tag, text, flags=re.IGNORECASE)
+    
+    # Все оставшиеся < и > экранируем
+    text = text.replace('<', '&lt;').replace('>', '&gt;')
+    
+    # Возвращаем валидные теги обратно
+    for key, val in placeholders.items():
+        text = text.replace(key, val)
+        
+    return text
+
 def verify_and_fix_urls(html_text: str) -> str:
     """Проверяет ссылки. Если ссылка содержит прямой идентификатор (PMID / DOI / раздел РКО), сохраняет её."""
     urls = re.findall(r'href=["\'](https?://[^"\']+)["\']', html_text)
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+    headers = {"User-Agent": "Mozilla/5.0"}
     
     for url in urls:
-        # Если ссылка уже ведет на конкретную статью по PMID или DOI, не трогаем её
         if re.search(r'pubmed\.ncbi\.nlm\.nih\.gov/\d+/?', url) or 'doi.org' in url or 'scardio.ru/rekomendacii' in url or 'russjcardiol' in url:
             continue
             
@@ -163,13 +196,28 @@ async def generate_and_publish_post(category: str = None) -> tuple[bool, str]:
         return False, f"Ошибка Gemini API: {last_error}"
 
     try:
+        # 1. Проверяем валидность ссылок
         verified_text = verify_and_fix_urls(post_text)
-        sent_msg = await bot_poster.send_message(
-            chat_id=CHANNEL_ID,
-            text=verified_text,
-            parse_mode="HTML",
-            disable_web_page_preview=False
-        )
+        # 2. Очищаем и защищаем HTML для Telegram
+        clean_html = sanitize_html_for_telegram(verified_text)
+
+        try:
+            sent_msg = await bot_poster.send_message(
+                chat_id=CHANNEL_ID,
+                text=clean_html,
+                parse_mode="HTML",
+                disable_web_page_preview=False
+            )
+        except Exception as html_err:
+            logging.warning(f"Ошибка HTML-разметки ({html_err}), отправка в чистом текстовом виде...")
+            # Если разметка всё равно вызвала сбой, отправляем как чистый текст
+            raw_text = re.sub(r'<[^>]+>', '', verified_text)
+            sent_msg = await bot_poster.send_message(
+                chat_id=CHANNEL_ID,
+                text=raw_text,
+                disable_web_page_preview=False
+            )
+
         logging.info(f"Пост опубликован в {CHANNEL_ID}! ID: {sent_msg.message_id}")
         return True, "Пост успешно опубликован в канал @lipidogram!"
     except Exception as e:
