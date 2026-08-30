@@ -106,7 +106,7 @@ async def generate_and_publish_post(category: str = None) -> tuple[bool, str]:
 
     try:
         response = ai_client.models.generate_content(
-            model='gemini-2.5-flash',
+            model='gemini-3.6-flash',
             contents=prompt,
             config=genai_types.GenerateContentConfig(
                 system_instruction=SYSTEM_PROMPT,
