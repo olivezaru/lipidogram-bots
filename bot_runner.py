@@ -49,14 +49,14 @@ SPAM_LINKS_PATTERN = re.compile(
     re.IGNORECASE
 )
 
-# Точные поисковые запросы (только RCT, клинические исследования и обзоры по кардиологии и спорту)
+# 5 строго чередующихся рубрик (включая точный раздел РКО и PubMed с абстрактами)
 RUBRICS = [
     {
-        "category": "🏃 СПОРТ И СОСУДЫ",
-        "source_type": "pubmed",
-        "query": '("aerobic exercise" OR "resistance training" OR "interval training") AND ("flow-mediated dilation" OR "endothelial" OR "HDL-C" OR "lipid profile") AND ("trial" OR "randomized")',
-        "ru_theme": "Влияние аэробных/силовых тренировок на сосудистый эндотелий, ЛПВП и триглицериды",
-        "hashtags": "#СпортИСосуды #ЗдоровьеСердца #Кардиотренировки #Эндотелий"
+        "category": "🇷🇺 НОВОСТИ РОССИЙСКОГО КАРДИОЛОГИЧЕСКОГО ОБЩЕСТВА (РКО)",
+        "source_type": "rko",
+        "query": "новости общества",
+        "ru_theme": "Новости и клинические события Российского кардиологического общества (РКО)",
+        "hashtags": "#Липидограм_РКО #КардиологияРФ #РКО #ЗдоровьеСердца"
     },
     {
         "category": "🥗 ГИПОЛИПИДЕМИЧЕСКАЯ КУХНЯ",
@@ -66,11 +66,11 @@ RUBRICS = [
         "hashtags": "#Рецепт_ЛПНП #УмнаяЗамена #ПитаниеСердца #Клетчатка"
     },
     {
-        "category": "🔬 СВЕЖАЯ НАУКА И АНАЛИЗЫ",
+        "category": "🏃 СПОРТ И СОСУДЫ",
         "source_type": "pubmed",
-        "query": '("Apolipoprotein B" OR "LDL-C lowering" OR "PCSK9" OR "SCORE2") AND ("cardiovascular risk" OR "atherosclerosis") AND ("guidelines" OR "trial" OR "meta-analysis")',
-        "ru_theme": "Клинические маркеры атеросклероза (АпоВ, ЛПНП, триглицериды, шкала риска SCORE-2)",
-        "hashtags": "#Липидограм_Наука #Кардиология #ЛПНП #PubMed"
+        "query": '("aerobic exercise" OR "resistance training" OR "interval training") AND ("flow-mediated dilation" OR "endothelial" OR "HDL-C" OR "lipid profile") AND ("trial" OR "randomized")',
+        "ru_theme": "Влияние аэробных/силовых тренировок на сосудистый эндотелий, ЛПВП и триглицериды",
+        "hashtags": "#СпортИСосуды #ЗдоровьеСердца #Кардиотренировки #Эндотелий"
     },
     {
         "category": "💡 РАЗБОР МИФОВ ДОКАЗАТЕЛЬНОЙ МЕДИЦИНОЙ",
@@ -80,11 +80,11 @@ RUBRICS = [
         "hashtags": "#Мифы_Липидограм #Доказательно #Холестерин"
     },
     {
-        "category": "🇷🇺 ОТКРЫТЫЕ НОВОСТИ РОССИЙСКОЙ КАРДИОЛОГИИ (РКО)",
-        "source_type": "rko",
-        "query": "липиды холестерин",
-        "ru_theme": "Открытые новости и регистры Российского кардиологического общества (РКО)",
-        "hashtags": "#Липидограм_РКО #КардиологияРФ #РКО #ЗдоровьеСердца"
+        "category": "🔬 СВЕЖАЯ НАУКА И АНАЛИЗЫ",
+        "source_type": "pubmed",
+        "query": '("Apolipoprotein B" OR "LDL-C lowering" OR "PCSK9" OR "SCORE2") AND ("cardiovascular risk" OR "atherosclerosis") AND ("guidelines" OR "trial" OR "meta-analysis")',
+        "ru_theme": "Клинические маркеры атеросклероза (АпоВ, ЛПНП, триглицериды, шкала риска SCORE-2)",
+        "hashtags": "#Липидограм_Наука #Кардиология #ЛПНП #PubMed"
     }
 ]
 
@@ -93,22 +93,75 @@ SYSTEM_PROMPT = """
 Твоя задача — написать экспертный, интересный и строго соответствующий первоисточнику пост НА РУССКОМ ЯЗЫКЕ.
 
 КРИТИЧЕСКИ ВАЖНОЕ ПРАВИЛО ДОСТОВЕРНОСТИ:
-Тебе передан полный текст АННОТАЦИИ (Abstract) статьи из PubMed.
-Ты обязан писать пост СТРОГО НА ОСНОВЕ ПЕРЕДАННОГО АБСТРАКТА.
-- Опиши реальный эксперимент, выборку и выводы ученых из этого текста.
-- Запрещено придумывать факты, темы или выводы, которых нет в абстракте.
+Тебе переданы реальные данные первоисточника (текст новости РКО или аннотация статьи из PubMed).
+Ты обязан писать пост СТРОГО НА ОСНОВЕ ПЕРЕДАННОГО ТЕКСТА.
+- Опиши суть события/исследования и выводы авторов.
+- Запрещено придумывать факты, темы или выводы, которых нет в первоисточнике.
 
 Формат публикации (HTML):
 • Заголовок: Яркий, привлекательный, с тематическими эмодзи (в тегах <b>Заголовок</b>).
-• Введение: 1-2 предложения, в чем практическая польза исследования для сосудов.
-• Научная суть (по результатам статьи): 3-4 емких тезиса с конкретными цифрами и выводами из абстракта.
+• Введение: 1-2 предложения, в чем практическая польза информации для здоровья сердца и сосудов.
+• Научная суть: 3-4 емких тезиса с конкретными фактами и цифрами из первоисточника.
 • Практический совет: Четкое действие для читателя (в тренировках, питании или контроле здоровья).
-• Первоисточник: Кликабельная ссылка СТРОГО на предоставленный URL: <a href="ТОЧНЫЙ_URL_СТАТЬИ">Название статьи / Журнал (PMID: НОМЕР)</a>.
+• Первоисточник: Кликабельная ссылка СТРОГО на предоставленный URL: <a href="ТОЧНЫЙ_URL_СТАТЬИ">Название / Источник</a>.
 • Хештеги рубрики в самом конце.
 
 Используй только валидные теги: <b>, </b>, <i>, </i>, <code>, </code>, <a href="...">.
 Все знаки «меньше» или «больше» пиши словами («менее», «более») или экранируй (&lt; и &gt;).
 """
+
+def fetch_rko_news() -> dict:
+    """Парсит открытые новости из раздела scardio.ru/news/novosti_obschestva/."""
+    base_section_url = "https://scardio.ru/news/novosti_obschestva/"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+    try:
+        resp = requests.get(base_section_url, headers=headers, timeout=8)
+        if resp.status_code == 200:
+            soup = BeautifulSoup(resp.text, "html.parser")
+            links = soup.find_all("a", href=True)
+            valid_news = []
+            
+            for a in links:
+                href = a["href"]
+                title = a.get_text(strip=True)
+                if "/news/novosti_obschestva/" in href and len(title) > 20 and href != "/news/novosti_obschestva/":
+                    full_url = f"https://scardio.ru{href}" if href.startswith("/") else href
+                    if not any(x in full_url for x in ["page=", "category=", "archive"]):
+                        valid_news.append({"title": title, "url": full_url})
+            
+            if valid_news:
+                import random
+                selected = random.choice(valid_news[:10])
+                content_desc = ""
+                try:
+                    article_resp = requests.get(selected["url"], headers=headers, timeout=5)
+                    if article_resp.status_code == 200:
+                        art_soup = BeautifulSoup(article_resp.text, "html.parser")
+                        paragraphs = art_soup.find_all("p")
+                        p_texts = [p.get_text(strip=True) for p in paragraphs if len(p.get_text(strip=True)) > 30]
+                        content_desc = "\n".join(p_texts[:4])
+                except Exception:
+                    pass
+
+                return {
+                    "title": selected["title"],
+                    "journal": "Российское кардиологическое общество (РКО)",
+                    "year": "2025-2026",
+                    "content": content_desc if content_desc else selected["title"],
+                    "url": selected["url"]
+                }
+    except Exception as e:
+        logging.warning(f"Ошибка парсинга раздела novosti_obschestva ({e})")
+
+    return {
+        "title": "Новости Российского кардиологического общества",
+        "journal": "РКО (scardio.ru)",
+        "year": "2025-2026",
+        "content": "Актуальные новости кардиологии, клинические стандарты и профилактика сердечно-сосудистых заболеваний.",
+        "url": base_section_url
+    }
 
 def fetch_pubmed_study_with_abstract(query: str) -> dict:
     """Ищет статью в PubMed и скачивает полный текст Abstract через efetch API."""
@@ -138,7 +191,6 @@ def fetch_pubmed_study_with_abstract(query: str) -> dict:
             return None
 
         import random
-        # Пробуем получить абстракт для нескольких найденных PMID
         random.shuffle(id_list)
         
         for pmid in id_list[:4]:
@@ -166,7 +218,6 @@ def fetch_pubmed_study_with_abstract(query: str) -> dict:
             year_elem = article.find(".//JournalIssue/PubDate/Year")
             year = year_elem.text if year_elem is not None else "2024-2026"
 
-            # Извлекаем полный текст Abstract
             abstract_texts = root.findall(".//Abstract/AbstractText")
             if not abstract_texts:
                 continue
@@ -180,51 +231,13 @@ def fetch_pubmed_study_with_abstract(query: str) -> dict:
                 "title": title,
                 "journal": journal,
                 "year": year,
-                "abstract": abstract[:2500],  # Передаем аннотацию
+                "abstract": abstract[:2500],
                 "url": f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/"
             }
     except Exception as e:
         logging.error(f"Ошибка NCBI PubMed API: {e}")
         
     return None
-
-def fetch_rko_news() -> dict:
-    """Парсит открытые новости с сайта РКО (scardio.ru/news)."""
-    try:
-        url = "https://scardio.ru/news/"
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
-        resp = requests.get(url, headers=headers, timeout=8)
-        if resp.status_code == 200:
-            soup = BeautifulSoup(resp.text, "html.parser")
-            links = soup.find_all("a", href=True)
-            valid_news = []
-            
-            for a in links:
-                href = a["href"]
-                title = a.get_text(strip=True)
-                if "/news/" in href and len(title) > 25 and not href.endswith("/news/"):
-                    full_url = f"https://scardio.ru{href}" if href.startswith("/") else href
-                    if not any(x in full_url for x in ["page=", "category=", "archive"]):
-                        valid_news.append({"title": title, "url": full_url})
-            
-            if valid_news:
-                import random
-                selected = random.choice(valid_news[:10])
-                return {
-                    "title": selected["title"],
-                    "journal": "Новости Российского кардиологического общества (РКО)",
-                    "year": "2025-2026",
-                    "url": selected["url"]
-                }
-    except Exception as e:
-        logging.warning(f"Ошибка получения новостей РКО: {e}")
-
-    return {
-        "title": "Открытые научно-клинические новости кардиологии",
-        "journal": "Российское кардиологическое общество (РКО)",
-        "year": "2025-2026",
-        "url": "https://scardio.ru/news/"
-    }
 
 def sanitize_html_for_telegram(text: str) -> str:
     allowed_tags = ['<b>', '</b>', '<i>', '</i>', '<code>', '</code>', '</a>']
@@ -268,10 +281,12 @@ async def generate_and_publish_post() -> tuple[bool, str]:
         study = fetch_rko_news()
         prompt = (
             f"Напиши готовый пост НА РУССКОМ ЯЗЫКЕ для Telegram-канала «Липидограм» в рубрику «{rubric['category']}».\n"
-            f"Тема: {rubric['ru_theme']}\n"
-            f"Российский открытый первоисточник: {study['title']}\n"
-            f"Организация/Журнал: {study['journal']} ({study['year']})\n"
-            f"Ссылка на открытый материал: {study['url']}\n\n"
+            f"Тема: {rubric['ru_theme']}\n\n"
+            f"РЕАЛЬНЫЕ ДАННЫЕ НОВОСТИ С САЙТА РКО (scardio.ru/news/novosti_obschestva/):\n"
+            f"Заголовок: {study['title']}\n"
+            f"Организация: {study['journal']} ({study['year']})\n"
+            f"Текст новости:\n{study.get('content', '')}\n\n"
+            f"Напиши пост СТРОГО по содержанию этой новости РКО.\n"
             f"В блоке Первоисточник поставь ТОЧНО эту ссылку: <a href='{study['url']}'>{study['title']} / {study['journal']}</a>.\n"
             f"В самом конце обязательно добавь хештеги: {rubric['hashtags']}"
         )
@@ -295,7 +310,7 @@ async def generate_and_publish_post() -> tuple[bool, str]:
             prompt = (
                 f"Напиши готовый пост НА РУССКОМ ЯЗЫКЕ для Telegram-канала «Липидограм» в рубрику «{rubric['category']}» на тему: {rubric['ru_theme']}.\n"
                 "Опирайся на доказательную медицину и клинические рекомендации РКО/ESC.\n"
-                "В первоисточнике укажи ссылку на открытые новости РКО: <a href='https://scardio.ru/news/'>Открытые новости Российского кардиологического общества (РКО)</a>.\n"
+                "В первоисточнике укажи ссылку на открытые новости РКО: <a href='https://scardio.ru/news/novosti_obschestva/'>Новости Российского кардиологического общества (РКО)</a>.\n"
                 f"В самом конце добавь хештеги: {rubric['hashtags']}"
             )
 
@@ -365,11 +380,11 @@ async def generate_and_publish_post() -> tuple[bool, str]:
 # --- Хэндлеры команд ---
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
-    await message.reply("🫀 Медиа-бот «Липидограм» активен.\n\nКоманда /post_now — публикация следующего поста из контент-плана (Спорт ➔ Рецепты ➔ Наука/Анализы ➔ Мифы ➔ РКО).")
+    await message.reply("🫀 Медиа-бот «Липидограм» активен.\n\nКоманда /post_now — публикация следующего поста из контент-плана (Новости РКО ➔ Рецепты ➔ Спорт ➔ Мифы ➔ Международная наука).")
 
 @dp.message(Command("post_now"))
 async def cmd_post_now(message: types.Message):
-    await message.reply("⏳ Запрашиваю исследование и его полный абстракт из PubMed/РКО и публикую в канал...")
+    await message.reply("⏳ Запрашиваю материал (РКО novosti_obschestva / PubMed Abstract) и формирую пост...")
     success, result_text = await generate_and_publish_post()
     if success:
         await message.reply("✅ " + result_text)
