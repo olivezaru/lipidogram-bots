@@ -1,7 +1,5 @@
 import os
 import re
-import io
-import json
 import urllib.parse
 import imaplib
 import email
@@ -77,6 +75,7 @@ RUBRIC_RECIPES = {
     "category": "🥗 ГИПОЛИПИДЕМИЧЕСКАЯ КУХНЯ",
     "source_type": "pubmed",
     "style_type": "recipe_card",
+    "default_keyword": "healthy food,oatmeal,salad",
     "query": '("dietary fiber" OR "beta-glucan" OR "legumes" OR "flaxseed" OR "olive oil") AND ("LDL cholesterol" OR "lipids") AND ("trial" OR "randomized")',
     "ru_theme": "Кулинарный рецепт для снижения ЛПНП (насыщенные жиры менее 1.5г, клетчатка более 6г)",
     "hashtags": "#Рецепт_ЛПНП #УмнаяЗамена #ПитаниеСердца #Клетчатка"
@@ -86,6 +85,7 @@ RUBRIC_YOUTUBE = {
     "category": "📺 МИРОВОЙ НАУЧПОП / ВЫЖИМКА",
     "source_type": "youtube",
     "style_type": "story_or_interview",
+    "default_keyword": "doctor,podcast,medical",
     "ru_theme": "Увлекательная выжимка из популярного видео мировых экспертов (Attia, Huberman, Утин, Rhonda Patrick)",
     "hashtags": "#Липидограм_Видео #Научпоп #Долголетие #ЗдоровьеСосудов"
 }
@@ -94,6 +94,7 @@ RUBRIC_MYTHS = {
     "category": "💡 МИФ ИЛИ РЕАЛЬНОСТЬ",
     "source_type": "pubmed",
     "style_type": "myth_buster",
+    "default_keyword": "eggs,coffee,medical research",
     "query": '("dietary cholesterol" OR "eggs" OR "statins" OR "omega-3 fatty acids" OR "coffee") AND ("atherosclerosis" OR "cardiovascular") AND ("meta-analysis" OR "systematic review")',
     "ru_theme": "Разбор популярного мифа: яйца, кофе, статины, чистки сосудов доказательной медициной",
     "hashtags": "#Мифы_Липидограм #Доказательно #Холестерин"
@@ -103,6 +104,7 @@ RUBRIC_SPORT = {
     "category": "🏃 АКТИВНОСТЬ И ЭЛАСТИЧНОСТЬ СОСУДОВ",
     "source_type": "pubmed",
     "style_type": "practical_guide",
+    "default_keyword": "running park,fitness,walking",
     "query": '("aerobic exercise" OR "resistance training" OR "walking") AND ("flow-mediated dilation" OR "endothelial" OR "HDL-C" OR "lipid profile") AND ("trial" OR "randomized")',
     "ru_theme": "Простые советы по движению: быстрая прогулка после еды, 8000 шагов в день, легкий бег в комфортном разговорном темпе без одышки, домашняя зарядка для сосудов",
     "hashtags": "#Движение_Липидограм #ЗдоровьеСердца #Прогулки #ЭластичностьСосудов"
@@ -112,6 +114,7 @@ RUBRIC_ACADEMIC_SCIENCE = {
     "category": "🔬 НАУЧНЫЙ ДАЙДЖЕСТ (РКО / PUBMED)",
     "source_type": "rko",
     "style_type": "expert_review",
+    "default_keyword": "cardiology,doctor,hospital,heart",
     "query": "липиды холестерин",
     "ru_theme": "Клинические новости Российского кардиологического общества (РКО) и новейшие мета-анализы",
     "hashtags": "#Липидограм_Наука #РКО #Кардиология #ЛПНП"
@@ -119,48 +122,56 @@ RUBRIC_ACADEMIC_SCIENCE = {
 
 SYSTEM_PROMPT = """
 Ты — главный редактор русскоязычного Telegram-канала «Липидограм» (@lipidogram).
-Твоя задача — писать доступно, живо, увлекательно, человеческим языком без непонятного профессионального сленга!
+Твоя задача — написать яркий пост простым языком и вернуть JSON с двумя полями:
+1. "post_text": готовый текст поста на русском языке с Telegram HTML разметкой.
+2. "photo_keyword": 1-2 точных английских слова для поиска реального профессионального фото на Unsplash (например: "oatmeal berries", "salmon salad", "running park", "coffee cup", "healthy heart").
 
-КАТЕГОРИЧЕСКИЙ ЗАПРЕТ НА ЖАРГОН:
-- ЗАПРЕЩЕНО использовать непонятный термин «Зона 2» без простого житейского объяснения!
-- Вместо «Зона 2» ВСЕГДА пиши понятным языком: «комфортный разговорный темп (когда можете говорить без одышки)», «быстрая ходьба на свежем воздухе», «легкая пробежка трусцой», «прогулка на велосипеде» или «8 000–10 000 шагов в день».
+КАТЕГОРИЧЕСКИЙ ЗАПРЕТ:
+- ЗАПРЕЩЕНО писать «Зона 2» без понятного объяснения. Пиши: «прогулка быстрым шагом», «бег в разговорном темпе без одышки», «8000 шагов».
+
+ТРЕБОВАНИЯ К ТЕКСТУ:
+- Объем: 600-850 символов (для идеального чтения под фото).
+- Разрешенные теги: <b>, </b>, <i>, </i>, <code>, </code>, <a href="...">.
+- Знаки < и > пиши словами («менее», «более») или экранируй (&lt; и &gt;).
+- В самом конце кликабельная ссылка на предоставленный URL первоисточника и хештеги.
 
 ВЕРНИ ОТВЕТ СТРОГО В ВИДЕ JSON:
 {
   "post_text": "...",
-  "image_prompt": "..."
+  "photo_keyword": "..."
 }
-
-ТРЕБОВАНИЯ К ТЕКСТУ ПОСТА ("post_text"):
-- Объем: 600-850 символов (емко, динамично, увлекательно).
-- Разрешенные теги: <b>, </b>, <i>, </i>, <code>, </code>, <a href="...">.
-- Знаки < и > пиши словами («менее», «более») или экранируй (&lt; и &gt;).
-- В самом конце обязательно кликабельная ссылка на предоставленный URL первоисточника и хештеги.
-
-ТРЕБОВАНИЯ К IMAGE PROMPT ("image_prompt"):
-- На АНГЛИЙСКОМ языке.
-- Описывай конкретную сцену фото (например: "Close-up shot of fresh salmon steak with sliced avocado and chia seeds on dark slate, professional food photography, 8k, soft studio lighting" или "A person walking briskly in a sunny green park, wearing comfortable sportswear, energetic healthy morning atmosphere, photorealistic, 8k").
 """
 
-def generate_ai_image_bytes(english_prompt: str) -> bytes:
+def fetch_unsplash_photo_bytes(keyword: str) -> bytes:
+    """Забирает реальное профессиональное фото высокой четкости с Unsplash."""
     try:
-        clean_p = re.sub(r'[\"\n\r]', ' ', english_prompt).strip()[:200]
-        seed = random.randint(1000, 99999)
-        full_prompt = f"photorealistic, {clean_p}, 8k resolution, cinematic lighting, masterpiece"
-        encoded = urllib.parse.quote(full_prompt)
-        url = f"https://image.pollinations.ai/prompt/{encoded}?width=1200&height=800&seed={seed}&nologo=true"
+        clean_kw = re.sub(r'[^a-zA-Z0-9\s]', '', keyword).strip()
+        if not clean_kw:
+            clean_kw = "healthy lifestyle"
         
-        resp = requests.get(url, timeout=12)
+        encoded_kw = urllib.parse.quote(clean_kw)
+        url = f"https://source.unsplash.com/1200x800/?{encoded_kw}"
+        
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        }
+        resp = requests.get(url, headers=headers, timeout=8, allow_redirects=True)
         if resp.status_code == 200 and len(resp.content) > 5000:
             return resp.content
     except Exception as e:
-        logging.warning(f"Ошибка Pollinations AI: {e}")
+        logging.warning(f"Ошибка Unsplash фото: {e}")
 
+    # Надежная прямая коллекция HD-фото на случай сбоя
+    backup_urls = [
+        "https://images.unsplash.com/photo-1517673132405-a56a62b18caf?auto=format&fit=crop&w=1200&q=80",
+        "https://images.unsplash.com/photo-1476480862126-209bfaa8edc8?auto=format&fit=crop&w=1200&q=80",
+        "https://images.unsplash.com/photo-1505751172876-fa1923c5c528?auto=format&fit=crop&w=1200&q=80",
+        "https://images.unsplash.com/photo-1540420773420-3366772f4999?auto=format&fit=crop&w=1200&q=80"
+    ]
     try:
-        backup_url = "https://images.unsplash.com/photo-1505751172876-fa1923c5c528?auto=format&fit=crop&w=1200&q=80"
-        resp = requests.get(backup_url, timeout=8)
-        if resp.status_code == 200:
-            return resp.content
+        r = requests.get(random.choice(backup_urls), timeout=6)
+        if r.status_code == 200:
+            return r.content
     except Exception:
         pass
     return None
@@ -185,6 +196,7 @@ def fetch_global_youtube_video() -> dict:
                 full_text = " ".join([t['text'] for t in transcript_list])
                 keywords = ["cholesterol", "ldl", "apob", "artery", "atherosclerosis", "heart", "diet", "walking", "exercise", "lipids", "statins", "omega-3", "холестерин", "сосуд", "сердц", "лпнп", "давлен", "питан", "статины", "жир", "ходьба", "спорт"]
                 if len(full_text) > 400 and any(kw in full_text.lower() for kw in keywords):
+                    # Превью оригинального видеоролика
                     yt_img = f"https://img.youtube.com/vi/{vid}/hqdefault.jpg"
                     img_bytes = None
                     try:
@@ -459,8 +471,7 @@ async def generate_and_publish_post(custom_rubric: dict = None) -> tuple[bool, s
             f"Напиши пост в стиле «{style}» для Telegram-канала «Липидограм» в рубрику «{rubric['category']}».\n"
             f"ТЕКСТ ВЫСТУПЛЕНИЯ СПИКЕРА:\n{study.get('content', '')}\n\n"
             f"В блоке Первоисточник поставь ТОЧНО эту ссылку на видео: <a href='{study['url']}'>{study['title']} ({study['journal']})</a>.\n"
-            f"В самом конце добавь хештеги: {rubric['hashtags']}\n\n"
-            "Не забудь сгенерировать точный английский 'image_prompt' для фото к этому видео."
+            f"В самом конце добавь хештеги: {rubric['hashtags']}"
         )
     elif rubric.get("source_type") == "rko":
         study = fetch_rko_news()
@@ -468,8 +479,7 @@ async def generate_and_publish_post(custom_rubric: dict = None) -> tuple[bool, s
             f"Напиши понятный и актуальный пост в стиле «{style}» для Telegram-канала «Липидограм» в рубрику «{rubric['category']}».\n"
             f"МАТЕРИАЛ РКО:\nЗаголовок: {study['title']}\nТекст: {study.get('content', '')}\n\n"
             f"В блоке Первоисточник поставь ТОЧНО эту ссылку: <a href='{study['url']}'>{study['title']} / {study['journal']}</a>.\n"
-            f"В самом конце добавь хештеги: {rubric['hashtags']}\n\n"
-            "Не забудь сгенерировать точный английский 'image_prompt' для медицинской иллюстрации."
+            f"В самом конце добавь хештеги: {rubric['hashtags']}"
         )
     else:
         study = fetch_pubmed_study_with_abstract(rubric['query'])
@@ -480,8 +490,7 @@ async def generate_and_publish_post(custom_rubric: dict = None) -> tuple[bool, s
                 f"ДАННЫЕ ИССЛЕДОВАНИЯ:\nЗаголовок: {study['title']}\nЖурнал: {study['journal']} ({study['year']})\nPMID: {study['pmid']}\n"
                 f"Аннотация:\n{study['abstract']}\n\n"
                 f"В блоке Первоисточник поставь ТОЧНО эту ссылку: <a href='{study['url']}'>{study['title']} / {study['journal']} (PMID: {study['pmid']})</a>.\n"
-                f"В самом конце добавь хештеги: {rubric['hashtags']}\n\n"
-                "Сгенерируй детальный английский 'image_prompt' (для рецепта — фото блюда, для движения — фото прогулки/пробежки, для мифа — точный предмет спора)."
+                f"В самом конце добавь хештеги: {rubric['hashtags']}"
             )
         else:
             prompt = (
@@ -499,7 +508,7 @@ async def generate_and_publish_post(custom_rubric: dict = None) -> tuple[bool, s
     ]
     
     post_text = None
-    image_prompt_en = None
+    photo_keyword = None
     last_error = None
 
     for model_name in models_to_try:
@@ -518,7 +527,7 @@ async def generate_and_publish_post(custom_rubric: dict = None) -> tuple[bool, s
                 if response and response.text:
                     parsed = json.loads(response.text)
                     post_text = parsed.get("post_text")
-                    image_prompt_en = parsed.get("image_prompt")
+                    photo_keyword = parsed.get("photo_keyword")
                     if post_text:
                         break
             except Exception as e:
@@ -530,17 +539,17 @@ async def generate_and_publish_post(custom_rubric: dict = None) -> tuple[bool, s
     if not post_text:
         return False, f"Ошибка генерации: {last_error}"
 
+    # Если для YouTube нет превью или это другая рубрика — подбираем качественное реальное фото Unsplash
     if not img_bytes:
-        if not image_prompt_en:
-            image_prompt_en = f"healthy lifestyle food cardiology {rubric['category']}"
-        logging.info(f"Генерация точной иллюстрации: '{image_prompt_en}'")
-        img_bytes = generate_ai_image_bytes(image_prompt_en)
+        target_kw = photo_keyword or rubric.get("default_keyword", "healthy lifestyle")
+        logging.info(f"Поиск профессионального фото по тегу: '{target_kw}'")
+        img_bytes = fetch_unsplash_photo_bytes(target_kw)
 
     try:
         clean_html = sanitize_html_for_telegram(post_text)
 
         if img_bytes:
-            photo_file = BufferedInputFile(img_bytes, filename="lipidogram_post.jpg")
+            photo_file = BufferedInputFile(img_bytes, filename="lipidogram_photo.jpg")
             
             if len(clean_html) <= 1020:
                 sent_msg = await bot_poster.send_photo(
@@ -557,8 +566,8 @@ async def generate_and_publish_post(custom_rubric: dict = None) -> tuple[bool, s
                     parse_mode="HTML",
                     disable_web_page_preview=False
                 )
-            logging.info(f"Пост успешно опубликован с визуалом! ID: {sent_msg.message_id}")
-            return True, f"Опубликован пост с уникальным фото («{rubric['category']}» / стиль: {style})!"
+            logging.info(f"Пост опубликован с фото высокой четкости! ID: {sent_msg.message_id}")
+            return True, f"Опубликован пост с качественным фото («{rubric['category']}» / стиль: {style})!"
 
         sent_msg = await bot_poster.send_message(
             chat_id=CHANNEL_ID,
@@ -575,9 +584,9 @@ async def generate_and_publish_post(custom_rubric: dict = None) -> tuple[bool, s
 async def cmd_start(message: types.Message):
     await message.reply(
         "🫀 Медиа-бот «Липидограм» обновлен!\n\n"
-        "• 🏃 Человеческий язык: никаких непонятных 'Зон 2' — только комфортные прогулки, шаги и легкий бег без одышки.\n"
-        "• 🎨 Точные фотореалистичные иллюстрации под каждый пост.\n"
-        "• 🚀 Работает на Gemini 3.7 Flash.\n\n"
+        "• 📸 Реальные профессиональные фотографии Unsplash высокой четкости.\n"
+        "• 🏃 Человеческий язык без непонятных 'Зон 2'.\n"
+        "• 🚀 Флагманская модель Gemini 3.7 Flash.\n\n"
         "Команды:\n"
         "• /post_now — публикация по расписанию.\n"
         "• /post_youtube — видеовыжимка мировых экспертов.\n"
@@ -587,7 +596,7 @@ async def cmd_start(message: types.Message):
 
 @dp.message(Command("post_now"))
 async def cmd_post_now(message: types.Message):
-    await message.reply("⏳ Gemini 3.7 генерирует пост простым языком и создает иллюстрацию...")
+    await message.reply("⏳ Gemini 3.7 подбирает реальное фото и формирует пост...")
     success, res = await generate_and_publish_post()
     await message.reply("✅ " + res if success else "❌ " + res)
 
@@ -599,13 +608,13 @@ async def cmd_post_yt(message: types.Message):
 
 @dp.message(Command("post_recipe"))
 async def cmd_post_rec(message: types.Message):
-    await message.reply("🥗 Генерирую фото блюда и карточку рецепта...")
+    await message.reply("🥗 Подбираю аппетитное фото блюда и карточку рецепта...")
     success, res = await generate_and_publish_post(RUBRIC_RECIPES)
     await message.reply("✅ " + res if success else "❌ " + res)
 
 @dp.message(Command("post_myth"))
 async def cmd_post_my(message: types.Message):
-    await message.reply("💡 Генерирую иллюстрацию и разбор мифа...")
+    await message.reply("💡 Подбираю тематическое фото и развенчиваю миф...")
     success, res = await generate_and_publish_post(RUBRIC_MYTHS)
     await message.reply("✅ " + res if success else "❌ " + res)
 
