@@ -1,5 +1,8 @@
 import os
 import re
+import imaplib
+import email
+from email.header import decode_header
 import asyncio
 import logging
 import requests
@@ -23,6 +26,11 @@ POSTER_TOKEN = os.getenv("POSTER_BOT_TOKEN", "").strip()
 GEMINI_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 CHANNEL_ID = os.getenv("CHANNEL_ID", "@lipidogram").strip()
 PORT = int(os.getenv("PORT", 8080))
+
+# Переменные почты для рассылки РКО
+EMAIL_HOST = os.getenv("EMAIL_HOST", "imap.gmail.com").strip()
+EMAIL_USER = os.getenv("EMAIL_USER", "").strip()
+EMAIL_PASS = os.getenv("EMAIL_PASS", "").strip()
 
 if not MODERATOR_TOKEN:
     logging.error("КРИТИЧЕСКАЯ ОШИБКА: MODERATOR_BOT_TOKEN не задан!")
@@ -49,13 +57,12 @@ SPAM_LINKS_PATTERN = re.compile(
     re.IGNORECASE
 )
 
-# 5 строго чередующихся рубрик (включая точный раздел РКО и PubMed с абстрактами)
 RUBRICS = [
     {
         "category": "🇷🇺 НОВОСТИ РОССИЙСКОГО КАРДИОЛОГИЧЕСКОГО ОБЩЕСТВА (РКО)",
         "source_type": "rko",
         "query": "новости общества",
-        "ru_theme": "Новости и клинические события Российского кардиологического общества (РКО)",
+        "ru_theme": "Новости и события Российского кардиологического общества (РКО) из почтовой рассылки и сайта",
         "hashtags": "#Липидограм_РКО #КардиологияРФ #РКО #ЗдоровьеСердца"
     },
     {
@@ -93,7 +100,7 @@ SYSTEM_PROMPT = """
 Твоя задача — написать экспертный, интересный и строго соответствующий первоисточнику пост НА РУССКОМ ЯЗЫКЕ.
 
 КРИТИЧЕСКИ ВАЖНОЕ ПРАВИЛО ДОСТОВЕРНОСТИ:
-Тебе переданы реальные данные первоисточника (текст новости РКО или аннотация статьи из PubMed).
+Тебе переданы реальные данные первоисточника (текст официальной email-рассылки/новости РКО или аннотация статьи из PubMed).
 Ты обязан писать пост СТРОГО НА ОСНОВЕ ПЕРЕДАННОГО ТЕКСТА.
 - Опиши суть события/исследования и выводы авторов.
 - Запрещено придумывать факты, темы или выводы, которых нет в первоисточнике.
@@ -110,8 +117,95 @@ SYSTEM_PROMPT = """
 Все знаки «меньше» или «больше» пиши словами («менее», «более») или экранируй (&lt; и &gt;).
 """
 
+def decode_mime_words(s):
+    """Декодирует тему письма из MIME-формата."""
+    if not s:
+        return ""
+    decoded_parts = decode_header(s)
+    result = []
+    for part, enc in decoded_parts:
+        if isinstance(part, bytes):
+            result.append(part.decode(enc or "utf-8", errors="ignore"))
+        else:
+            result.append(part)
+    return "".join(result)
+
+def fetch_rko_from_email() -> dict:
+    """Проверяет почтовый ящик на наличие свежих писем рассылки от РКО (scardio.ru)."""
+    if not (EMAIL_USER and EMAIL_PASS):
+        return None
+
+    try:
+        mail = imaplib.IMAP4_SSL(EMAIL_HOST)
+        mail.login(EMAIL_USER, EMAIL_PASS)
+        mail.select("inbox")
+
+        # Ищем письма от РКО или с темой кардиологии
+        status, messages = mail.search(None, '(OR (FROM "scardio") (SUBJECT "РКО"))')
+        if status != "OK" or not messages[0]:
+            # Ищем любые непрочитанные письма
+            status, messages = mail.search(None, 'UNSEEN')
+            
+        if not messages[0]:
+            mail.logout()
+            return None
+
+        email_ids = messages[0].split()
+        latest_id = email_ids[-1]  # Берем самое последнее письмо
+
+        res, msg_data = mail.fetch(latest_id, "(RFC822)")
+        raw_email = msg_data[0][1]
+        msg = email.message_from_bytes(raw_email)
+
+        subject = decode_mime_words(msg["Subject"])
+        sender = decode_mime_words(msg["From"])
+
+        # Извлекаем текст письма и ссылки
+        body = ""
+        found_links = []
+
+        if msg.is_multipart():
+            for part in msg.walk():
+                ctype = part.get_content_type()
+                if ctype == "text/plain":
+                    body += part.get_payload(decode=True).decode("utf-8", errors="ignore")
+                elif ctype == "text/html":
+                    html_content = part.get_payload(decode=True).decode("utf-8", errors="ignore")
+                    soup = BeautifulSoup(html_content, "html.parser")
+                    body += soup.get_text(separator="\n", strip=True)
+                    for a in soup.find_all("a", href=True):
+                        href = a["href"]
+                        if "scardio.ru" in href or "http" in href:
+                            found_links.append(href)
+        else:
+            body = msg.get_payload(decode=True).decode("utf-8", errors="ignore")
+
+        # Помечаем письмо как прочитанное
+        mail.store(latest_id, '+FLAGS', '\\Seen')
+        mail.logout()
+
+        target_url = found_links[0] if found_links else "https://scardio.ru/news/novosti_obschestva/"
+
+        logging.info(f"Найдено письмо от РКО: {subject}")
+        return {
+            "title": subject,
+            "journal": "Официальная рассылка Российского кардиологического общества (РКО)",
+            "year": "2025-2026",
+            "content": body[:2500],
+            "url": target_url
+        }
+    except Exception as e:
+        logging.warning(f"Ошибка проверки почты РКО: {e}")
+        return None
+
 def fetch_rko_news() -> dict:
-    """Парсит открытые новости из раздела scardio.ru/news/novosti_obschestva/."""
+    """Сначала проверяет email-рассылку, а если писем нет — открытый раздел scardio.ru/news/novosti_obschestva/."""
+    # 1. Проверяем почтовую рассылку РКО
+    email_study = fetch_rko_from_email()
+    if email_study:
+        return email_study
+
+    # 2. Если писем нет, парсим открытый сайт
     base_section_url = "https://scardio.ru/news/novosti_obschestva/"
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
@@ -282,11 +376,11 @@ async def generate_and_publish_post() -> tuple[bool, str]:
         prompt = (
             f"Напиши готовый пост НА РУССКОМ ЯЗЫКЕ для Telegram-канала «Липидограм» в рубрику «{rubric['category']}».\n"
             f"Тема: {rubric['ru_theme']}\n\n"
-            f"РЕАЛЬНЫЕ ДАННЫЕ НОВОСТИ С САЙТА РКО (scardio.ru/news/novosti_obschestva/):\n"
+            f"РЕАЛЬНЫЕ ДАННЫЕ РКО (из официальной рассылки/сайта scardio.ru):\n"
             f"Заголовок: {study['title']}\n"
             f"Организация: {study['journal']} ({study['year']})\n"
-            f"Текст новости:\n{study.get('content', '')}\n\n"
-            f"Напиши пост СТРОГО по содержанию этой новости РКО.\n"
+            f"Текст:\n{study.get('content', '')}\n\n"
+            f"Напиши пост СТРОГО по содержанию этого материала РКО.\n"
             f"В блоке Первоисточник поставь ТОЧНО эту ссылку: <a href='{study['url']}'>{study['title']} / {study['journal']}</a>.\n"
             f"В самом конце обязательно добавь хештеги: {rubric['hashtags']}"
         )
@@ -380,11 +474,25 @@ async def generate_and_publish_post() -> tuple[bool, str]:
 # --- Хэндлеры команд ---
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
-    await message.reply("🫀 Медиа-бот «Липидограм» активен.\n\nКоманда /post_now — публикация следующего поста из контент-плана (Новости РКО ➔ Рецепты ➔ Спорт ➔ Мифы ➔ Международная наука).")
+    await message.reply("🫀 Медиа-бот «Липидограм» активен.\n\nКоманды:\n• /post_now — публикация следующего поста из контент-плана.\n• /check_email — проверить почту на свежие письма от РКО и опубликовать дайджест.")
+
+@dp.message(Command("check_email"))
+async def cmd_check_email(message: types.Message):
+    await message.reply("📬 Проверяю ваш почтовый ящик на свежие письма от РКО...")
+    email_data = fetch_rko_from_email()
+    if email_data:
+        await message.reply(f"Найдено письмо: «{email_data['title']}»! Генерирую пост...")
+        # Устанавливаем индекс на РКО
+        global current_rubric_index
+        current_rubric_index = 0
+        success, result_text = await generate_and_publish_post()
+        await message.reply("✅ " + result_text if success else "❌ " + result_text)
+    else:
+        await message.reply("Новых писем от РКО в ящике сейчас нет. Бот будет использовать открытые новости сайта и PubMed.")
 
 @dp.message(Command("post_now"))
 async def cmd_post_now(message: types.Message):
-    await message.reply("⏳ Запрашиваю материал (РКО novosti_obschestva / PubMed Abstract) и формирую пост...")
+    await message.reply("⏳ Запрашиваю материал (Email РКО / scardio.ru / PubMed Abstract) и формирую пост...")
     success, result_text = await generate_and_publish_post()
     if success:
         await message.reply("✅ " + result_text)
