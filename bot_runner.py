@@ -122,14 +122,14 @@ SYSTEM_PROMPT = """
 - ЗАПРЕЩЕНО писать «Зона 2» без понятного объяснения. Пиши: «прогулка быстрым шагом», «бег в разговорном темпе без одышки», «8000 шагов».
 
 ТРЕБОВАНИЯ К ТЕКСТУ ("post_text"):
-- Объем: 600-850 символов (для идеального чтения под фото).
+- Объем: строго 500-750 символов (для идеального размещения в подписи к фото).
 - Разрешенные теги: <b>, </b>, <i>, </i>, <code>, </code>, <a href="...">.
 - Знаки < и > пиши словами («менее», «более») или экранируй (&lt; и &gt;).
 - В самом конце кликабельная ссылка на предоставленный URL первоисточника и хештеги.
 
 ТРЕБОВАНИЯ К IMAGE PROMPT ("image_prompt"):
 - На АНГЛИЙСКОМ языке.
-- Описывай конкретную фотореалистичную сцену для генерации (например: "Close-up of fresh grilled salmon with avocado and spinach salad on black ceramic plate, professional restaurant food photography, 8k resolution, soft studio lighting" или "A healthy person walking briskly in a sunny green park, wearing casual sportswear, energetic morning light, photorealistic, 8k").
+- Описывай конкретную фотореалистичную сцену для генерации (например: "Close-up of fresh grilled salmon with avocado and spinach salad on black ceramic plate, professional restaurant food photography, 8k resolution, soft studio lighting").
 
 ВЕРНИ ОТВЕТ СТРОГО В JSON:
 {
@@ -175,7 +175,6 @@ def generate_kie_text_and_prompt(user_prompt: str) -> tuple[str, str]:
             if resp.status_code == 200:
                 raw_json = resp.json()
                 
-                # Защита от системных ошибок KIE.ai внутри JSON со статусом 200
                 if isinstance(raw_json, dict) and (raw_json.get("code") in [500, 400, 401, 403] or "Server exception" in str(raw_json)):
                     last_error = f"KIE error: {raw_json.get('msg', 'Server exception')}"
                     continue
@@ -203,7 +202,6 @@ def generate_kie_text_and_prompt(user_prompt: str) -> tuple[str, str]:
                 if match:
                     parsed = json.loads(match.group(0))
                     
-                    # Проверяем, не является ли JSON ошибкой
                     if "code" in parsed and "msg" in parsed:
                         continue
 
@@ -220,9 +218,59 @@ def generate_kie_text_and_prompt(user_prompt: str) -> tuple[str, str]:
 
     raise Exception(f"KIE.ai Gemini 3.7 ошибка: {last_error}")
 
-async def generate_kie_image_bytes(image_prompt: str) -> bytes:
-    if not KIE_KEY or not image_prompt:
+def extract_image_url_from_kie_response(data: dict) -> str:
+    """Извлекает URL картинки из любых возможных структур ответа KIE.ai."""
+    if not isinstance(data, dict):
         return None
+
+    # Проверяем вложенные блоки
+    result_data = data.get("data", {}) if isinstance(data.get("data"), dict) else data
+
+    candidates = [
+        result_data.get("result"),
+        result_data.get("url"),
+        result_data.get("image_url"),
+        result_data.get("imageUrl"),
+        data.get("result"),
+        data.get("url"),
+        data.get("image_url")
+    ]
+
+    for item in candidates:
+        if isinstance(item, str) and item.startswith("http"):
+            return item
+        if isinstance(item, dict):
+            u = item.get("url") or item.get("image_url")
+            if u and isinstance(u, str) and u.startswith("http"):
+                return u
+
+    # Списки images / output / results
+    for list_key in ["images", "output", "results", "data"]:
+        arr = result_data.get(list_key) or data.get(list_key)
+        if isinstance(arr, list) and len(arr) > 0:
+            first = arr[0]
+            if isinstance(first, str) and first.startswith("http"):
+                return first
+            if isinstance(first, dict):
+                u = first.get("url") or first.get("image_url")
+                if u and isinstance(u, str) and u.startswith("http"):
+                    return u
+
+    # Если результат запакован в JSON-строку
+    res_str = result_data.get("result")
+    if isinstance(res_str, str) and (res_str.startswith("{") or res_str.startswith("[")):
+        try:
+            parsed_inner = json.loads(res_str)
+            return extract_image_url_from_kie_response(parsed_inner if isinstance(parsed_inner, dict) else {"images": parsed_inner})
+        except Exception:
+            pass
+
+    return None
+
+async def generate_kie_image(image_prompt: str) -> tuple[str, bytes]:
+    """Генерирует изображение в Nano Banana 2 Lite и возвращает (image_url, image_bytes)."""
+    if not KIE_KEY or not image_prompt:
+        return None, None
 
     create_url = "https://api.kie.ai/api/v1/jobs/createTask"
     headers = {
@@ -230,7 +278,7 @@ async def generate_kie_image_bytes(image_prompt: str) -> bytes:
         "Content-Type": "application/json"
     }
 
-    clean_prompt = f"Professional commercial food and medicine photography, 8k resolution, photorealistic, cinematic lighting, {image_prompt}"
+    clean_prompt = f"Professional commercial photography, 8k resolution, photorealistic, {image_prompt}"
 
     payload = {
         "model": "nano-banana-2-lite",
@@ -244,11 +292,11 @@ async def generate_kie_image_bytes(image_prompt: str) -> bytes:
     }
 
     try:
-        logging.info(f"Создание задачи Nano Banana 2 Lite... Промпт: {clean_prompt[:70]}...")
+        logging.info(f"Создание задачи Nano Banana 2 Lite... Промпт: {clean_prompt[:60]}...")
         resp = requests.post(create_url, headers=headers, json=payload, timeout=25)
         if resp.status_code != 200:
-            logging.warning(f"KIE Nano Banana createTask HTTP {resp.status_code}: {resp.text[:150]}")
-            return None
+            logging.warning(f"KIE createTask HTTP {resp.status_code}: {resp.text[:150]}")
+            return None, None
 
         res_data = resp.json()
         task_id = (
@@ -258,31 +306,26 @@ async def generate_kie_image_bytes(image_prompt: str) -> bytes:
             or res_data.get("id")
         )
 
-        direct_url = (
-            res_data.get("data", {}).get("url") 
-            or res_data.get("data", {}).get("image_url") 
-            or res_data.get("url")
-        )
-        if direct_url and isinstance(direct_url, str) and direct_url.startswith("http"):
-            img_res = requests.get(direct_url, timeout=20)
-            if img_res.status_code == 200 and len(img_res.content) > 3000:
-                logging.info("Nano Banana 2 Lite отдала картинку мгновенно!")
-                return img_res.content
+        # Проверяем мгновенную готовность
+        direct_url = extract_image_url_from_kie_response(res_data)
+        if direct_url:
+            logging.info(f"Nano Banana отдала URL сразу: {direct_url}")
+            return direct_url, None
 
         if not task_id:
-            logging.warning(f"Не удалось получить taskId от KIE.ai: {res_data}")
-            return None
+            logging.warning(f"Не найден taskId в ответе KIE: {res_data}")
+            return None, None
 
-        logging.info(f"Задача Nano Banana создана (TaskId: {task_id}). Ожидание генерации (до 50 сек)...")
+        logging.info(f"Задача создана (TaskId: {task_id}). Ожидание завершения генерации в KIE...")
 
         status_urls = [
             f"https://api.kie.ai/api/v1/jobs/getTask?taskId={task_id}",
             f"https://api.kie.ai/api/v1/jobs/{task_id}",
             f"https://api.kie.ai/api/v1/jobs/record/{task_id}"
         ]
-        
-        # 16 циклов по 3 секунды = 48 секунд ожидания
-        for attempt in range(1, 17):
+
+        # Ожидаем до 60 секунд (20 циклов по 3 секунды)
+        for attempt in range(1, 21):
             await asyncio.sleep(3)
             for s_url in status_urls:
                 try:
@@ -291,43 +334,34 @@ async def generate_kie_image_bytes(image_prompt: str) -> bytes:
                         s_data = s_resp.json()
                         result_data = s_data.get("data", {}) if isinstance(s_data.get("data"), dict) else s_data
                         
-                        state = (
+                        state = str(
                             result_data.get("state") 
                             or result_data.get("status") 
                             or s_data.get("status") 
-                            or s_data.get("state")
-                        )
+                            or s_data.get("state") 
+                            or ""
+                        ).lower()
 
-                        logging.info(f"Статус Nano Banana (попытка {attempt}/16): {state}")
+                        logging.info(f"Статус Nano Banana (шаг {attempt}/20): {state}")
 
-                        if str(state).lower() in ["success", "completed", "done", "1"]:
-                            img_url = (
-                                result_data.get("result") 
-                                or result_data.get("url") 
-                                or result_data.get("image_url")
-                                or (result_data.get("images") and isinstance(result_data["images"], list) and result_data["images"][0])
-                                or (result_data.get("output") and isinstance(result_data["output"], list) and result_data["output"][0])
-                            )
-                            if isinstance(img_url, dict):
-                                img_url = img_url.get("url") or img_url.get("image_url")
+                        if state in ["success", "completed", "done", "1"]:
+                            found_url = extract_image_url_from_kie_response(s_data)
+                            if found_url:
+                                logging.info(f"Получен URL готовой картинки KIE: {found_url}")
+                                return found_url, None
 
-                            if img_url and isinstance(img_url, str) and img_url.startswith("http"):
-                                logging.info(f"Скачивание готового арта: {img_url}")
-                                img_res = requests.get(img_url, timeout=25)
-                                if img_res.status_code == 200 and len(img_res.content) > 3000:
-                                    logging.info("Иллюстрация Nano Banana 2 Lite успешно получена!")
-                                    return img_res.content
-                        elif str(state).lower() in ["failed", "error", "-1"]:
-                            logging.warning(f"Генерация Nano Banana завершилась ошибкой: {result_data}")
-                            return None
-                except Exception:
+                        elif state in ["failed", "error", "-1"]:
+                            logging.warning(f"Ошибка генерации в KIE: {s_data}")
+                            return None, None
+                except Exception as loop_e:
+                    logging.debug(f"Ошибка опроса статуса: {loop_e}")
                     continue
 
-        logging.warning("Превышено время ожидания готовности арта Nano Banana.")
+        logging.warning("Таймаут ожидания картинки Nano Banana 2 Lite.")
     except Exception as e:
         logging.warning(f"Ошибка вызова Nano Banana 2 Lite: {e}")
 
-    return None
+    return None, None
 
 def fetch_global_youtube_video() -> dict:
     channel = random.choice(GLOBAL_HEALTH_CHANNELS)
@@ -350,20 +384,12 @@ def fetch_global_youtube_video() -> dict:
                 keywords = ["cholesterol", "ldl", "apob", "artery", "atherosclerosis", "heart", "diet", "walking", "exercise", "lipids", "statins", "omega-3", "холестерин", "сосуд", "сердц", "лпнп", "давлен", "питан", "статины", "жир", "ходьба", "спорт"]
                 if len(full_text) > 400 and any(kw in full_text.lower() for kw in keywords):
                     yt_img = f"https://img.youtube.com/vi/{vid}/hqdefault.jpg"
-                    img_bytes = None
-                    try:
-                        r = requests.get(yt_img, timeout=6)
-                        if r.status_code == 200:
-                            img_bytes = r.content
-                    except Exception:
-                        pass
-
                     return {
                         "title": f"Разбор эксперта: {channel['name']}",
                         "journal": f"YouTube-канал {channel['name']}",
                         "year": "2025-2026",
                         "content": full_text[:3500],
-                        "image_bytes": img_bytes,
+                        "image_url": yt_img,
                         "url": f"https://www.youtube.com/watch?v={vid}"
                     }
             except Exception:
@@ -376,7 +402,7 @@ def fetch_global_youtube_video() -> dict:
         "journal": f"YouTube-канал {channel['name']}",
         "year": "2025-2026",
         "content": "Подробный разбор факторов риска, холестерина, пользы ежедневных прогулок быстрым шагом и оптимизации питания.",
-        "image_bytes": None,
+        "image_url": None,
         "url": f"https://www.youtube.com/{channel['handle']}"
     }
 
@@ -619,11 +645,11 @@ async def generate_and_publish_post(custom_rubric: dict = None) -> tuple[bool, s
     style = rubric.get("style_type", "expert_review")
     logging.info(f"Запуск рубрики: {rubric['category']} (стиль: {style})")
 
-    img_bytes = None
+    img_url = None
 
     if rubric.get("source_type") == "youtube":
         study = fetch_global_youtube_video()
-        img_bytes = study.get("image_bytes")
+        img_url = study.get("image_url")
         prompt = (
             f"Напиши пост в стиле «{style}» для Telegram-канала «Липидограм» в рубрику «{rubric['category']}».\n"
             f"ТЕКСТ ВЫСТУПЛЕНИЯ СПИКЕРА:\n{study.get('content', '')}\n\n"
@@ -661,44 +687,70 @@ async def generate_and_publish_post(custom_rubric: dict = None) -> tuple[bool, s
         if not post_text:
             return False, "Ошибка: модель вернула пустой текст поста."
     except Exception as e:
-        return False, f"Ошибка генерации: {e}"
+        return False, f"Ошибка генерации текста: {e}"
 
-    if not img_bytes and image_prompt:
-        img_bytes = await generate_kie_image_bytes(image_prompt)
+    # Если это не YouTube, генерируем арт в Nano Banana 2 Lite
+    if not img_url and image_prompt:
+        img_url, _ = await generate_kie_image(image_prompt)
 
     try:
         clean_html = sanitize_html_for_telegram(post_text)
 
-        if img_bytes:
-            photo_file = BufferedInputFile(img_bytes, filename="lipidogram_post.jpg")
-            
-            if len(clean_html) <= 1020:
-                sent_msg = await bot_poster.send_photo(
-                    chat_id=CHANNEL_ID,
-                    photo=photo_file,
-                    caption=clean_html,
-                    parse_mode="HTML"
-                )
-            else:
-                await bot_poster.send_photo(chat_id=CHANNEL_ID, photo=photo_file)
-                sent_msg = await bot_poster.send_message(
-                    chat_id=CHANNEL_ID,
-                    text=clean_html,
-                    parse_mode="HTML",
-                    disable_web_page_preview=False
-                )
-            logging.info(f"Пост опубликован через KIE.ai! ID: {sent_msg.message_id}")
-            return True, f"Опубликован пост («{rubric['category']}» / стиль: {style}) с иллюстрацией Nano Banana!"
+        # Если есть картинка от Nano Banana или YouTube
+        if img_url:
+            logging.info(f"Отправка фото в канал {CHANNEL_ID}: {img_url}")
+            try:
+                if len(clean_html) <= 1024:
+                    sent_msg = await bot_poster.send_photo(
+                        chat_id=CHANNEL_ID,
+                        photo=img_url,
+                        caption=clean_html,
+                        parse_mode="HTML"
+                    )
+                else:
+                    await bot_poster.send_photo(chat_id=CHANNEL_ID, photo=img_url)
+                    sent_msg = await bot_poster.send_message(
+                        chat_id=CHANNEL_ID,
+                        text=clean_html,
+                        parse_mode="HTML",
+                        disable_web_page_preview=False
+                    )
+                logging.info(f"Пост с фото опубликован! ID: {sent_msg.message_id}")
+                return True, f"Опубликован пост («{rubric['category']}») с артом Nano Banana!"
+            except Exception as photo_err:
+                logging.warning(f"Не удалось отправить фото по URL ({photo_err}), скачиваем байты...")
+                try:
+                    r_img = requests.get(img_url, timeout=15)
+                    if r_img.status_code == 200:
+                        file_input = BufferedInputFile(r_img.content, filename="post_art.jpg")
+                        if len(clean_html) <= 1024:
+                            sent_msg = await bot_poster.send_photo(
+                                chat_id=CHANNEL_ID,
+                                photo=file_input,
+                                caption=clean_html,
+                                parse_mode="HTML"
+                            )
+                        else:
+                            await bot_poster.send_photo(chat_id=CHANNEL_ID, photo=file_input)
+                            sent_msg = await bot_poster.send_message(
+                                chat_id=CHANNEL_ID,
+                                text=clean_html,
+                                parse_mode="HTML"
+                            )
+                        return True, f"Опубликован пост («{rubric['category']}») с артом!"
+                except Exception as b_err:
+                    logging.error(f"Ошибка отправки байтов фото: {b_err}")
 
+        # Если арт не сгенерировался, шлем просто текст
         sent_msg = await bot_poster.send_message(
             chat_id=CHANNEL_ID,
             text=clean_html,
             parse_mode="HTML",
             disable_web_page_preview=False
         )
-        return True, f"Опубликован пост рубрики «{rubric['category']}» (без фото)!"
+        return True, f"Опубликован текстовый пост рубрики «{rubric['category']}»."
     except Exception as e:
-        return False, f"Ошибка отправки: {e}"
+        return False, f"Ошибка отправки в Telegram: {e}"
 
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
