@@ -1,5 +1,7 @@
 import os
 import re
+import io
+import json
 import urllib.parse
 import imaplib
 import email
@@ -19,15 +21,13 @@ from aiogram.types import BufferedInputFile
 from aiogram.enums import ChatMemberStatus
 from aiogram.filters import Command
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from google import genai
-from google.genai import types as genai_types
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
 MODERATOR_TOKEN = os.getenv("MODERATOR_BOT_TOKEN", "").strip()
 POSTER_TOKEN = os.getenv("POSTER_BOT_TOKEN", "").strip()
-GEMINI_KEY = os.getenv("GEMINI_API_KEY", "").strip()
+KIE_KEY = os.getenv("KIE_API_KEY", "").strip()
 CHANNEL_ID = os.getenv("CHANNEL_ID", "@lipidogram").strip()
 PORT = int(os.getenv("PORT", 8080))
 
@@ -44,8 +44,6 @@ if POSTER_TOKEN and POSTER_TOKEN != MODERATOR_TOKEN:
     bot_poster = Bot(token=POSTER_TOKEN)
 else:
     bot_poster = bot_moderator
-
-ai_client = genai.Client(api_key=GEMINI_KEY) if GEMINI_KEY else None
 
 dp = Dispatcher()
 user_warnings = {}
@@ -75,7 +73,6 @@ RUBRIC_RECIPES = {
     "category": "🥗 ГИПОЛИПИДЕМИЧЕСКАЯ КУХНЯ",
     "source_type": "pubmed",
     "style_type": "recipe_card",
-    "default_keyword": "healthy food,oatmeal,salad",
     "query": '("dietary fiber" OR "beta-glucan" OR "legumes" OR "flaxseed" OR "olive oil") AND ("LDL cholesterol" OR "lipids") AND ("trial" OR "randomized")',
     "ru_theme": "Кулинарный рецепт для снижения ЛПНП (насыщенные жиры менее 1.5г, клетчатка более 6г)",
     "hashtags": "#Рецепт_ЛПНП #УмнаяЗамена #ПитаниеСердца #Клетчатка"
@@ -85,7 +82,6 @@ RUBRIC_YOUTUBE = {
     "category": "📺 МИРОВОЙ НАУЧПОП / ВЫЖИМКА",
     "source_type": "youtube",
     "style_type": "story_or_interview",
-    "default_keyword": "doctor,podcast,medical",
     "ru_theme": "Увлекательная выжимка из популярного видео мировых экспертов (Attia, Huberman, Утин, Rhonda Patrick)",
     "hashtags": "#Липидограм_Видео #Научпоп #Долголетие #ЗдоровьеСосудов"
 }
@@ -94,7 +90,6 @@ RUBRIC_MYTHS = {
     "category": "💡 МИФ ИЛИ РЕАЛЬНОСТЬ",
     "source_type": "pubmed",
     "style_type": "myth_buster",
-    "default_keyword": "eggs,coffee,medical research",
     "query": '("dietary cholesterol" OR "eggs" OR "statins" OR "omega-3 fatty acids" OR "coffee") AND ("atherosclerosis" OR "cardiovascular") AND ("meta-analysis" OR "systematic review")',
     "ru_theme": "Разбор популярного мифа: яйца, кофе, статины, чистки сосудов доказательной медициной",
     "hashtags": "#Мифы_Липидограм #Доказательно #Холестерин"
@@ -104,7 +99,6 @@ RUBRIC_SPORT = {
     "category": "🏃 АКТИВНОСТЬ И ЭЛАСТИЧНОСТЬ СОСУДОВ",
     "source_type": "pubmed",
     "style_type": "practical_guide",
-    "default_keyword": "running park,fitness,walking",
     "query": '("aerobic exercise" OR "resistance training" OR "walking") AND ("flow-mediated dilation" OR "endothelial" OR "HDL-C" OR "lipid profile") AND ("trial" OR "randomized")',
     "ru_theme": "Простые советы по движению: быстрая прогулка после еды, 8000 шагов в день, легкий бег в комфортном разговорном темпе без одышки, домашняя зарядка для сосудов",
     "hashtags": "#Движение_Липидограм #ЗдоровьеСердца #Прогулки #ЭластичностьСосудов"
@@ -114,7 +108,6 @@ RUBRIC_ACADEMIC_SCIENCE = {
     "category": "🔬 НАУЧНЫЙ ДАЙДЖЕСТ (РКО / PUBMED)",
     "source_type": "rko",
     "style_type": "expert_review",
-    "default_keyword": "cardiology,doctor,hospital,heart",
     "query": "липиды холестерин",
     "ru_theme": "Клинические новости Российского кардиологического общества (РКО) и новейшие мета-анализы",
     "hashtags": "#Липидограм_Наука #РКО #Кардиология #ЛПНП"
@@ -122,57 +115,121 @@ RUBRIC_ACADEMIC_SCIENCE = {
 
 SYSTEM_PROMPT = """
 Ты — главный редактор русскоязычного Telegram-канала «Липидограм» (@lipidogram).
-Твоя задача — написать яркий пост простым языком и вернуть JSON с двумя полями:
-1. "post_text": готовый текст поста на русском языке с Telegram HTML разметкой.
-2. "photo_keyword": 1-2 точных английских слова для поиска реального фото на Unsplash (например: "oatmeal berries", "salmon salad", "running park", "coffee cup", "healthy heart").
+Твоя задача — написать яркий, легкий и увлекательный пост простым человеческим языком.
 
 КАТЕГОРИЧЕСКИЙ ЗАПРЕТ:
 - ЗАПРЕЩЕНО писать «Зона 2» без понятного объяснения. Пиши: «прогулка быстрым шагом», «бег в разговорном темпе без одышки», «8000 шагов».
 
-ТРЕБОВАНИЯ К ТЕКСТУ:
+ТРЕБОВАНИЯ К ТЕКСТУ ("post_text"):
 - Объем: 600-850 символов (для идеального чтения под фото).
 - Разрешенные теги: <b>, </b>, <i>, </i>, <code>, </code>, <a href="...">.
 - Знаки < и > пиши словами («менее», «более») или экранируй (&lt; и &gt;).
 - В самом конце кликабельная ссылка на предоставленный URL первоисточника и хештеги.
 
-ВЕРНИ ОТВЕТ СТРОГО В ВИДЕ JSON:
+ТРЕБОВАНИЯ К IMAGE PROMPT ("image_prompt"):
+- На АНГЛИЙСКОМ языке.
+- Описывай конкретную фотореалистичную сцену для генератора изображений (например: "Close-up of fresh grilled salmon with avocado and spinach salad on black ceramic plate, professional restaurant food photography, 8k resolution, soft studio lighting" или "A healthy person walking briskly in a sunny green park, wearing casual sportswear, energetic morning light, photorealistic, 8k").
+
+ВЕРНИ ОТВЕТ СТРОГО В JSON:
 {
   "post_text": "...",
-  "photo_keyword": "..."
+  "image_prompt": "..."
 }
 """
 
-def fetch_unsplash_photo_bytes(keyword: str) -> bytes:
-    """Забирает реальное профессиональное фото высокой четкости с Unsplash."""
-    try:
-        clean_kw = re.sub(r'[^a-zA-Z0-9\s]', '', keyword).strip()
-        if not clean_kw:
-            clean_kw = "healthy lifestyle"
-        
-        encoded_kw = urllib.parse.quote(clean_kw)
-        url = f"https://source.unsplash.com/1200x800/?{encoded_kw}"
-        
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        }
-        resp = requests.get(url, headers=headers, timeout=8, allow_redirects=True)
-        if resp.status_code == 200 and len(resp.content) > 5000:
-            return resp.content
-    except Exception as e:
-        logging.warning(f"Ошибка Unsplash фото: {e}")
+def generate_kie_text_and_prompt(user_prompt: str) -> tuple[str, str]:
+    """Генерирует текст поста через Gemini 3.7 Flash в KIE.ai."""
+    if not KIE_KEY:
+        raise ValueError("KIE_API_KEY не установлен в Render!")
 
-    backup_urls = [
-        "https://images.unsplash.com/photo-1517673132405-a56a62b18caf?auto=format&fit=crop&w=1200&q=80",
-        "https://images.unsplash.com/photo-1476480862126-209bfaa8edc8?auto=format&fit=crop&w=1200&q=80",
-        "https://images.unsplash.com/photo-1505751172876-fa1923c5c528?auto=format&fit=crop&w=1200&q=80",
-        "https://images.unsplash.com/photo-1540420773420-3366772f4999?auto=format&fit=crop&w=1200&q=80"
+    url = "https://api.kie.ai/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {KIE_KEY}",
+        "Content-Type": "application/json"
+    }
+
+    # Модели текста KIE.ai
+    models_to_try = [
+        "gemini-3.7-flash",
+        "gemini-2.5-flash",
+        "gpt-4o-mini"
     ]
+
+    for model in models_to_try:
+        try:
+            logging.info(f"Запрос текста в KIE.ai ({model})...")
+            payload = {
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": user_prompt}
+                ],
+                "response_format": {"type": "json_object"},
+                "temperature": 0.75
+            }
+            resp = requests.post(url, headers=headers, json=payload, timeout=20)
+            if resp.status_code == 200:
+                data = resp.json()
+                content = data["choices"][0]["message"]["content"]
+                parsed = json.loads(content)
+                return parsed.get("post_text"), parsed.get("image_prompt")
+            else:
+                logging.warning(f"KIE.ai returned status {resp.status_code}: {resp.text}")
+        except Exception as e:
+            logging.warning(f"KIE.ai модель {model} вернула ошибку: {e}")
+            continue
+
+    raise Exception("Не удалось сгенерировать текст через KIE.ai")
+
+def generate_kie_image_bytes(image_prompt: str) -> bytes:
+    """Генерирует изображение через модель Nano Banana 2 Lite в KIE.ai."""
+    if not KIE_KEY:
+        return None
+
+    url = "https://api.kie.ai/v1/images/generations"
+    headers = {
+        "Authorization": f"Bearer {KIE_KEY}",
+        "Content-Type": "application/json"
+    }
+    
+    clean_p = f"Professional commercial photography, 8k, photorealistic, {image_prompt}"
+    
+    # Список названий моделей для nano banana в API
+    banana_models = ["nano-banana-2-lite", "nano-banana", "flux-pro", "dall-e-3"]
+
+    for b_model in banana_models:
+        payload = {
+            "model": b_model,
+            "prompt": clean_p,
+            "n": 1,
+            "size": "1024x1024"
+        }
+
+        try:
+            logging.info(f"Генерация фото в KIE.ai через модель {b_model}...")
+            resp = requests.post(url, headers=headers, json=payload, timeout=25)
+            if resp.status_code == 200:
+                data = resp.json()
+                image_url = data.get("data", [{}])[0].get("url")
+                if image_url:
+                    img_resp = requests.get(image_url, timeout=12)
+                    if img_resp.status_code == 200 and len(img_resp.content) > 5000:
+                        return img_resp.content
+            else:
+                logging.warning(f"KIE Image API ({b_model}) status {resp.status_code}: {resp.text}")
+        except Exception as e:
+            logging.warning(f"Ошибка KIE Image ({b_model}): {e}")
+
+    # Надежный резерв Unsplash если генерация недоступна
     try:
-        r = requests.get(random.choice(backup_urls), timeout=6)
-        if r.status_code == 200:
-            return r.content
+        clean_kw = re.sub(r'[^a-zA-Z0-9\s]', '', image_prompt.split(",")[0])[:25]
+        unsplash_url = f"https://source.unsplash.com/1200x800/?{urllib.parse.quote(clean_kw)}"
+        u_resp = requests.get(unsplash_url, timeout=8, headers={"User-Agent": "Mozilla/5.0"})
+        if u_resp.status_code == 200 and len(u_resp.content) > 5000:
+            return u_resp.content
     except Exception:
         pass
+
     return None
 
 def fetch_global_youtube_video() -> dict:
@@ -446,8 +503,8 @@ def pick_rubric_by_schedule() -> dict:
         return RUBRIC_MYTHS
 
 async def generate_and_publish_post(custom_rubric: dict = None) -> tuple[bool, str]:
-    if not ai_client:
-        err = "GEMINI_API_KEY не установлен в переменных Render!"
+    if not KIE_KEY:
+        err = "KIE_API_KEY не установлен в переменных Render!"
         logging.error(err)
         return False, err
 
@@ -497,57 +554,20 @@ async def generate_and_publish_post(custom_rubric: dict = None) -> tuple[bool, s
                 f"В самом конце добавь хештеги: {rubric['hashtags']}"
             )
 
-    # ИСКЛЮЧИТЕЛЬНО АКТУАЛЬНЫЕ МОДЕЛИ GEMINI
-    models_to_try = [
-        'gemini-3.7-flash',
-        'gemini-3.6-flash'
-    ]
-    
-    post_text = None
-    photo_keyword = None
-    last_error = None
+    try:
+        post_text, image_prompt = generate_kie_text_and_prompt(prompt)
+    except Exception as e:
+        return False, f"Ошибка генерации через KIE.ai: {e}"
 
-    import json
-    for model_name in models_to_try:
-        for attempt in range(2):
-            try:
-                logging.info(f"Генерация через {model_name}...")
-                response = ai_client.models.generate_content(
-                    model=model_name,
-                    contents=prompt,
-                    config=genai_types.GenerateContentConfig(
-                        system_instruction=SYSTEM_PROMPT,
-                        response_mime_type="application/json",
-                        temperature=0.75,
-                    )
-                )
-                if response and response.text:
-                    parsed = json.loads(response.text)
-                    post_text = parsed.get("post_text")
-                    photo_keyword = parsed.get("photo_keyword")
-                    if post_text:
-                        break
-            except Exception as e:
-                last_error = e
-                logging.warning(f"Ошибка {model_name}: {e}")
-                await asyncio.sleep(1.5)
-        if post_text:
-            break
-
-    if not post_text:
-        return False, f"Ошибка генерации: {last_error}"
-
-    # Если для YouTube нет превью или это другая рубрика — подбираем качественное фото Unsplash
-    if not img_bytes:
-        target_kw = photo_keyword or rubric.get("default_keyword", "healthy lifestyle")
-        logging.info(f"Поиск профессионального фото по тегу: '{target_kw}'")
-        img_bytes = fetch_unsplash_photo_bytes(target_kw)
+    # Если для YouTube нет превью или это другая рубрика — генерируем через Nano Banana 2 Lite в KIE.ai
+    if not img_bytes and image_prompt:
+        img_bytes = generate_kie_image_bytes(image_prompt)
 
     try:
         clean_html = sanitize_html_for_telegram(post_text)
 
         if img_bytes:
-            photo_file = BufferedInputFile(img_bytes, filename="lipidogram_photo.jpg")
+            photo_file = BufferedInputFile(img_bytes, filename="lipidogram_banana.jpg")
             
             if len(clean_html) <= 1020:
                 sent_msg = await bot_poster.send_photo(
@@ -564,8 +584,8 @@ async def generate_and_publish_post(custom_rubric: dict = None) -> tuple[bool, s
                     parse_mode="HTML",
                     disable_web_page_preview=False
                 )
-            logging.info(f"Пост опубликован с фото! ID: {sent_msg.message_id}")
-            return True, f"Опубликован пост с качественным фото («{rubric['category']}» / стиль: {style})!"
+            logging.info(f"Пост опубликован через KIE.ai (Gemini 3.7 + Nano Banana)! ID: {sent_msg.message_id}")
+            return True, f"Опубликован пост («{rubric['category']}» / стиль: {style}) с иллюстрацией Nano Banana!"
 
         sent_msg = await bot_poster.send_message(
             chat_id=CHANNEL_ID,
@@ -581,10 +601,10 @@ async def generate_and_publish_post(custom_rubric: dict = None) -> tuple[bool, s
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     await message.reply(
-        "🫀 Медиа-бот «Липидограм» обновлен!\n\n"
-        "• 🚀 Работает строго на актуальных моделях Gemini 3.7 и 3.6 Flash.\n"
-        "• 📸 Реальные профессиональные фотографии Unsplash высокой четкости.\n"
-        "• 🏃 Понятный язык без спортивного жаргона.\n\n"
+        "🫀 Медиа-бот «Липидограм» подключен к вашему тарифу KIE.ai!\n\n"
+        "• 🚀 Тексты: Gemini 3.7 Flash.\n"
+        "• 🍌 Иллюстрации: Nano Banana 2 Lite.\n"
+        "• 🏃 Человеческий язык без непонятных терминов.\n\n"
         "Команды:\n"
         "• /post_now — публикация по расписанию.\n"
         "• /post_youtube — видеовыжимка мировых экспертов.\n"
@@ -594,25 +614,25 @@ async def cmd_start(message: types.Message):
 
 @dp.message(Command("post_now"))
 async def cmd_post_now(message: types.Message):
-    await message.reply("⏳ Gemini 3.7 формирует пост и подбирает фото...")
+    await message.reply("⏳ Gemini 3.7 + Nano Banana 2 Lite формируют пост...")
     success, res = await generate_and_publish_post()
     await message.reply("✅ " + res if success else "❌ " + res)
 
 @dp.message(Command("post_youtube"))
 async def cmd_post_yt(message: types.Message):
-    await message.reply("🎬 Забираю превью ролика и формирую пост...")
+    await message.reply("🎬 Забираю видео и формирую выжимку...")
     success, res = await generate_and_publish_post(RUBRIC_YOUTUBE)
     await message.reply("✅ " + res if success else "❌ " + res)
 
 @dp.message(Command("post_recipe"))
 async def cmd_post_rec(message: types.Message):
-    await message.reply("🥗 Подбираю аппетитное фото блюда и карточку рецепта...")
+    await message.reply("🥗 Nano Banana 2 Lite генерирует фото блюда и рецепт...")
     success, res = await generate_and_publish_post(RUBRIC_RECIPES)
     await message.reply("✅ " + res if success else "❌ " + res)
 
 @dp.message(Command("post_myth"))
 async def cmd_post_my(message: types.Message):
-    await message.reply("💡 Подбираю тематическое фото и развенчиваю миф...")
+    await message.reply("💡 Gemini 3.7 развенчивает миф, а Nano Banana создает арт...")
     success, res = await generate_and_publish_post(RUBRIC_MYTHS)
     await message.reply("✅ " + res if success else "❌ " + res)
 
@@ -707,7 +727,7 @@ async def main():
     scheduler.add_job(generate_and_publish_post, "cron", hour=18, minute=30)
     scheduler.start()
 
-    logging.info("Служба расписания и боты успешно запущены на Gemini 3.7 / 3.6 Flash!")
+    logging.info("Служба расписания и боты успешно запущены на KIE.ai (Gemini 3.7 + Nano Banana)!")
 
     if bot_poster:
         if bot_moderator and bot_moderator != bot_poster:
