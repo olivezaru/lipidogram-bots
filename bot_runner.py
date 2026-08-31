@@ -124,7 +124,7 @@ SYSTEM_PROMPT = """
 Ты — главный редактор русскоязычного Telegram-канала «Липидограм» (@lipidogram).
 Твоя задача — написать яркий пост простым языком и вернуть JSON с двумя полями:
 1. "post_text": готовый текст поста на русском языке с Telegram HTML разметкой.
-2. "photo_keyword": 1-2 точных английских слова для поиска реального профессионального фото на Unsplash (например: "oatmeal berries", "salmon salad", "running park", "coffee cup", "healthy heart").
+2. "photo_keyword": 1-2 точных английских слова для поиска реального фото на Unsplash (например: "oatmeal berries", "salmon salad", "running park", "coffee cup", "healthy heart").
 
 КАТЕГОРИЧЕСКИЙ ЗАПРЕТ:
 - ЗАПРЕЩЕНО писать «Зона 2» без понятного объяснения. Пиши: «прогулка быстрым шагом», «бег в разговорном темпе без одышки», «8000 шагов».
@@ -161,7 +161,6 @@ def fetch_unsplash_photo_bytes(keyword: str) -> bytes:
     except Exception as e:
         logging.warning(f"Ошибка Unsplash фото: {e}")
 
-    # Надежная прямая коллекция HD-фото на случай сбоя
     backup_urls = [
         "https://images.unsplash.com/photo-1517673132405-a56a62b18caf?auto=format&fit=crop&w=1200&q=80",
         "https://images.unsplash.com/photo-1476480862126-209bfaa8edc8?auto=format&fit=crop&w=1200&q=80",
@@ -196,7 +195,6 @@ def fetch_global_youtube_video() -> dict:
                 full_text = " ".join([t['text'] for t in transcript_list])
                 keywords = ["cholesterol", "ldl", "apob", "artery", "atherosclerosis", "heart", "diet", "walking", "exercise", "lipids", "statins", "omega-3", "холестерин", "сосуд", "сердц", "лпнп", "давлен", "питан", "статины", "жир", "ходьба", "спорт"]
                 if len(full_text) > 400 and any(kw in full_text.lower() for kw in keywords):
-                    # Превью оригинального видеоролика
                     yt_img = f"https://img.youtube.com/vi/{vid}/hqdefault.jpg"
                     img_bytes = None
                     try:
@@ -499,22 +497,21 @@ async def generate_and_publish_post(custom_rubric: dict = None) -> tuple[bool, s
                 f"В самом конце добавь хештеги: {rubric['hashtags']}"
             )
 
+    # ИСКЛЮЧИТЕЛЬНО АКТУАЛЬНЫЕ МОДЕЛИ GEMINI
     models_to_try = [
         'gemini-3.7-flash',
-        'gemini-3.6-flash',
-        'gemini-2.5-flash',
-        'gemini-2.5-flash-lite',
-        'gemini-2.0-flash'
+        'gemini-3.6-flash'
     ]
     
     post_text = None
     photo_keyword = None
     last_error = None
 
+    import json
     for model_name in models_to_try:
         for attempt in range(2):
             try:
-                logging.info(f"Генерация через Gemini {model_name}...")
+                logging.info(f"Генерация через {model_name}...")
                 response = ai_client.models.generate_content(
                     model=model_name,
                     contents=prompt,
@@ -532,6 +529,7 @@ async def generate_and_publish_post(custom_rubric: dict = None) -> tuple[bool, s
                         break
             except Exception as e:
                 last_error = e
+                logging.warning(f"Ошибка {model_name}: {e}")
                 await asyncio.sleep(1.5)
         if post_text:
             break
@@ -539,7 +537,7 @@ async def generate_and_publish_post(custom_rubric: dict = None) -> tuple[bool, s
     if not post_text:
         return False, f"Ошибка генерации: {last_error}"
 
-    # Если для YouTube нет превью или это другая рубрика — подбираем качественное реальное фото Unsplash
+    # Если для YouTube нет превью или это другая рубрика — подбираем качественное фото Unsplash
     if not img_bytes:
         target_kw = photo_keyword or rubric.get("default_keyword", "healthy lifestyle")
         logging.info(f"Поиск профессионального фото по тегу: '{target_kw}'")
@@ -566,7 +564,7 @@ async def generate_and_publish_post(custom_rubric: dict = None) -> tuple[bool, s
                     parse_mode="HTML",
                     disable_web_page_preview=False
                 )
-            logging.info(f"Пост опубликован с фото высокой четкости! ID: {sent_msg.message_id}")
+            logging.info(f"Пост опубликован с фото! ID: {sent_msg.message_id}")
             return True, f"Опубликован пост с качественным фото («{rubric['category']}» / стиль: {style})!"
 
         sent_msg = await bot_poster.send_message(
@@ -584,9 +582,9 @@ async def generate_and_publish_post(custom_rubric: dict = None) -> tuple[bool, s
 async def cmd_start(message: types.Message):
     await message.reply(
         "🫀 Медиа-бот «Липидограм» обновлен!\n\n"
+        "• 🚀 Работает строго на актуальных моделях Gemini 3.7 и 3.6 Flash.\n"
         "• 📸 Реальные профессиональные фотографии Unsplash высокой четкости.\n"
-        "• 🏃 Человеческий язык без непонятных 'Зон 2'.\n"
-        "• 🚀 Флагманская модель Gemini 3.7 Flash.\n\n"
+        "• 🏃 Понятный язык без спортивного жаргона.\n\n"
         "Команды:\n"
         "• /post_now — публикация по расписанию.\n"
         "• /post_youtube — видеовыжимка мировых экспертов.\n"
@@ -596,7 +594,7 @@ async def cmd_start(message: types.Message):
 
 @dp.message(Command("post_now"))
 async def cmd_post_now(message: types.Message):
-    await message.reply("⏳ Gemini 3.7 подбирает реальное фото и формирует пост...")
+    await message.reply("⏳ Gemini 3.7 формирует пост и подбирает фото...")
     success, res = await generate_and_publish_post()
     await message.reply("✅ " + res if success else "❌ " + res)
 
@@ -709,7 +707,7 @@ async def main():
     scheduler.add_job(generate_and_publish_post, "cron", hour=18, minute=30)
     scheduler.start()
 
-    logging.info("Служба расписания и боты успешно запущены!")
+    logging.info("Служба расписания и боты успешно запущены на Gemini 3.7 / 3.6 Flash!")
 
     if bot_poster:
         if bot_moderator and bot_moderator != bot_poster:
