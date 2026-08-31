@@ -140,12 +140,11 @@ SYSTEM_PROMPT = """
 
 def generate_kie_text_and_prompt(user_prompt: str) -> tuple[str, str]:
     if not KIE_KEY:
-        raise ValueError("KIE_API_KEY не установлен в переменных Render!")
+        raise ValueError("KIE_API_KEY не установлен в переменных окружения!")
 
     urls = [
-        f"https://api.kie.ai/gemini/v1/models/gemini-3-7-flash:generateContent?key={KIE_KEY}",
         f"https://api.kie.ai/gemini/v1/models/gemini-3.7-flash:generateContent?key={KIE_KEY}",
-        f"https://api.kie.ai/gemini/v1/models/gemini-3-7-flash:streamGenerateContent?key={KIE_KEY}"
+        f"https://api.kie.ai/gemini/v1/models/gemini-3-7-flash:generateContent?key={KIE_KEY}"
     ]
     
     headers = {
@@ -169,71 +168,52 @@ def generate_kie_text_and_prompt(user_prompt: str) -> tuple[str, str]:
     }
 
     last_error = ""
-    for url in urls:
+    for target_url in urls:
         try:
-            logging.info("Запрос в KIE.ai Gemini 3.7...")
-            resp = requests.post(url, headers=headers, json=payload, timeout=45)
+            logging.info("Отправка запроса в KIE.ai Gemini 3.7 Flash...")
+            resp = requests.post(target_url, headers=headers, json=payload, timeout=40)
             if resp.status_code == 200:
-                raw_text = resp.text
-                full_text = ""
+                raw_json = resp.json()
+                
+                # Защита от системных ошибок KIE.ai внутри JSON со статусом 200
+                if isinstance(raw_json, dict) and (raw_json.get("code") in [500, 400, 401, 403] or "Server exception" in str(raw_json)):
+                    last_error = f"KIE error: {raw_json.get('msg', 'Server exception')}"
+                    continue
 
-                try:
-                    data = resp.json()
-                    if isinstance(data, list):
-                        for chunk in data:
-                            parts = chunk.get("candidates", [{}])[0].get("content", {}).get("parts", [])
-                            if parts:
-                                full_text += parts[0].get("text", "")
-                    elif isinstance(data, dict):
-                        candidates = data.get("candidates", [])
-                        if candidates:
-                            parts = candidates[0].get("content", {}).get("parts", [])
-                            if parts:
-                                full_text += parts[0].get("text", "")
-                except Exception:
-                    matches = re.findall(r'"text":\s*"((?:[^"\\]|\\.)*)"', raw_text)
-                    if matches:
-                        full_text = "".join(matches).encode('utf-8').decode('unicode_escape')
+                candidates = raw_json.get("candidates", []) if isinstance(raw_json, dict) else []
+                if not candidates:
+                    continue
 
-                if not full_text:
-                    full_text = raw_text
+                content_parts = candidates[0].get("content", {}).get("parts", [])
+                if not content_parts:
+                    continue
 
-                # Снимаем возможное markdown-обрамление
-                clean_json_str = full_text.strip()
-                if clean_json_str.startswith("```json"):
-                    clean_json_str = clean_json_str[7:]
-                if clean_json_str.startswith("```"):
-                    clean_json_str = clean_json_str[3:]
-                if clean_json_str.endswith("```"):
-                    clean_json_str = clean_json_str[:-3]
-                clean_json_str = clean_json_str.strip()
+                raw_text = content_parts[0].get("text", "")
+                
+                clean_str = raw_text.strip()
+                if clean_str.startswith("```json"):
+                    clean_str = clean_str[7:]
+                if clean_str.startswith("```"):
+                    clean_str = clean_str[3:]
+                if clean_str.endswith("```"):
+                    clean_str = clean_str[:-3]
+                clean_str = clean_str.strip()
 
-                match = re.search(r'\{[\s\S]*\}', clean_json_str)
+                match = re.search(r'\{[\s\S]*\}', clean_str)
                 if match:
-                    try:
-                        parsed = json.loads(match.group(0))
-                        post_text = (
-                            parsed.get("post_text")
-                            or parsed.get("text")
-                            or parsed.get("post")
-                            or parsed.get("content")
-                            or parsed.get("message")
-                        )
-                        image_prompt = (
-                            parsed.get("image_prompt")
-                            or parsed.get("prompt")
-                            or parsed.get("image")
-                            or "healthy cardiology food lifestyle"
-                        )
-                        if post_text:
-                            return str(post_text).strip(), str(image_prompt).strip()
-                    except Exception as json_err:
-                        logging.warning(f"Ошибка json.loads: {json_err}")
+                    parsed = json.loads(match.group(0))
+                    
+                    # Проверяем, не является ли JSON ошибкой
+                    if "code" in parsed and "msg" in parsed:
+                        continue
 
-                if full_text and len(full_text.strip()) > 30:
-                    return full_text.strip(), "healthy cardiology food lifestyle"
+                    post_text = parsed.get("post_text") or parsed.get("text") or parsed.get("post") or parsed.get("content")
+                    image_prompt = parsed.get("image_prompt") or parsed.get("prompt") or parsed.get("image")
+                    
+                    if post_text and len(str(post_text).strip()) > 50:
+                        return str(post_text).strip(), str(image_prompt or "healthy cardiology food lifestyle").strip()
             else:
-                last_error = f"HTTP {resp.status_code}: {resp.text[:150]}"
+                last_error = f"HTTP {resp.status_code}: {resp.text[:120]}"
         except Exception as e:
             last_error = str(e)
             continue
@@ -250,12 +230,13 @@ async def generate_kie_image_bytes(image_prompt: str) -> bytes:
         "Content-Type": "application/json"
     }
 
-    clean_prompt = f"Professional commercial photography, 8k resolution, photorealistic, {image_prompt}"
+    clean_prompt = f"Professional commercial food and medicine photography, 8k resolution, photorealistic, cinematic lighting, {image_prompt}"
 
     payload = {
         "model": "nano-banana-2-lite",
         "input": {
             "prompt": clean_prompt,
+            "aspect_ratio": "1:1",
             "width": 1024,
             "height": 1024,
             "image_num": 1
@@ -263,52 +244,88 @@ async def generate_kie_image_bytes(image_prompt: str) -> bytes:
     }
 
     try:
-        logging.info("Создание задачи Nano Banana 2 Lite в KIE.ai...")
+        logging.info(f"Создание задачи Nano Banana 2 Lite... Промпт: {clean_prompt[:70]}...")
         resp = requests.post(create_url, headers=headers, json=payload, timeout=25)
-        if resp.status_code == 200:
-            res_data = resp.json()
-            task_id = res_data.get("data", {}).get("taskId") or res_data.get("taskId") or res_data.get("id")
+        if resp.status_code != 200:
+            logging.warning(f"KIE Nano Banana createTask HTTP {resp.status_code}: {resp.text[:150]}")
+            return None
 
-            direct_url = res_data.get("data", {}).get("url") or res_data.get("data", {}).get("image_url")
-            if direct_url:
-                img_res = requests.get(direct_url, timeout=15)
-                if img_res.status_code == 200:
-                    return img_res.content
+        res_data = resp.json()
+        task_id = (
+            res_data.get("data", {}).get("taskId") 
+            or res_data.get("data", {}).get("id") 
+            or res_data.get("taskId") 
+            or res_data.get("id")
+        )
 
-            if task_id:
-                status_urls = [
-                    f"https://api.kie.ai/api/v1/jobs/getTask?taskId={task_id}",
-                    f"https://api.kie.ai/api/v1/jobs/record/{task_id}",
-                    f"https://api.kie.ai/api/v1/jobs/{task_id}"
-                ]
-                
-                for _ in range(8):
-                    await asyncio.sleep(2.5)
-                    for s_url in status_urls:
-                        try:
-                            s_resp = requests.get(s_url, headers=headers, timeout=10)
-                            if s_resp.status_code == 200:
-                                s_data = s_resp.json()
-                                result_data = s_data.get("data", {})
-                                state = result_data.get("state") or result_data.get("status") or s_data.get("status")
+        direct_url = (
+            res_data.get("data", {}).get("url") 
+            or res_data.get("data", {}).get("image_url") 
+            or res_data.get("url")
+        )
+        if direct_url and isinstance(direct_url, str) and direct_url.startswith("http"):
+            img_res = requests.get(direct_url, timeout=20)
+            if img_res.status_code == 200 and len(img_res.content) > 3000:
+                logging.info("Nano Banana 2 Lite отдала картинку мгновенно!")
+                return img_res.content
 
-                                if state in ["SUCCESS", "COMPLETED", "success", "completed", 1]:
-                                    img_url = (
-                                        result_data.get("result") 
-                                        or result_data.get("url") 
-                                        or result_data.get("image_url")
-                                        or (result_data.get("images", []) and result_data["images"][0])
-                                    )
-                                    if img_url and isinstance(img_url, str) and img_url.startswith("http"):
-                                        img_res = requests.get(img_url, timeout=15)
-                                        if img_res.status_code == 200 and len(img_res.content) > 3000:
-                                            return img_res.content
-                        except Exception:
-                            continue
-        else:
-            logging.warning(f"KIE Nano Banana createTask status {resp.status_code}: {resp.text[:150]}")
+        if not task_id:
+            logging.warning(f"Не удалось получить taskId от KIE.ai: {res_data}")
+            return None
+
+        logging.info(f"Задача Nano Banana создана (TaskId: {task_id}). Ожидание генерации (до 50 сек)...")
+
+        status_urls = [
+            f"https://api.kie.ai/api/v1/jobs/getTask?taskId={task_id}",
+            f"https://api.kie.ai/api/v1/jobs/{task_id}",
+            f"https://api.kie.ai/api/v1/jobs/record/{task_id}"
+        ]
+        
+        # 16 циклов по 3 секунды = 48 секунд ожидания
+        for attempt in range(1, 17):
+            await asyncio.sleep(3)
+            for s_url in status_urls:
+                try:
+                    s_resp = requests.get(s_url, headers=headers, timeout=10)
+                    if s_resp.status_code == 200:
+                        s_data = s_resp.json()
+                        result_data = s_data.get("data", {}) if isinstance(s_data.get("data"), dict) else s_data
+                        
+                        state = (
+                            result_data.get("state") 
+                            or result_data.get("status") 
+                            or s_data.get("status") 
+                            or s_data.get("state")
+                        )
+
+                        logging.info(f"Статус Nano Banana (попытка {attempt}/16): {state}")
+
+                        if str(state).lower() in ["success", "completed", "done", "1"]:
+                            img_url = (
+                                result_data.get("result") 
+                                or result_data.get("url") 
+                                or result_data.get("image_url")
+                                or (result_data.get("images") and isinstance(result_data["images"], list) and result_data["images"][0])
+                                or (result_data.get("output") and isinstance(result_data["output"], list) and result_data["output"][0])
+                            )
+                            if isinstance(img_url, dict):
+                                img_url = img_url.get("url") or img_url.get("image_url")
+
+                            if img_url and isinstance(img_url, str) and img_url.startswith("http"):
+                                logging.info(f"Скачивание готового арта: {img_url}")
+                                img_res = requests.get(img_url, timeout=25)
+                                if img_res.status_code == 200 and len(img_res.content) > 3000:
+                                    logging.info("Иллюстрация Nano Banana 2 Lite успешно получена!")
+                                    return img_res.content
+                        elif str(state).lower() in ["failed", "error", "-1"]:
+                            logging.warning(f"Генерация Nano Banana завершилась ошибкой: {result_data}")
+                            return None
+                except Exception:
+                    continue
+
+        logging.warning("Превышено время ожидания готовности арта Nano Banana.")
     except Exception as e:
-        logging.warning(f"Ошибка Nano Banana 2 Lite: {e}")
+        logging.warning(f"Ошибка вызова Nano Banana 2 Lite: {e}")
 
     return None
 
@@ -355,7 +372,7 @@ def fetch_global_youtube_video() -> dict:
         logging.warning(f"Ошибка YouTube {channel['name']}: {e}")
 
     return {
-        "title": f"Популярный видеоразбор о здоровье сердца и сосудов",
+        "title": "Популярный видеоразбор о здоровье сердца и сосудов",
         "journal": f"YouTube-канал {channel['name']}",
         "year": "2025-2026",
         "content": "Подробный разбор факторов риска, холестерина, пользы ежедневных прогулок быстрым шагом и оптимизации питания.",
@@ -679,7 +696,7 @@ async def generate_and_publish_post(custom_rubric: dict = None) -> tuple[bool, s
             parse_mode="HTML",
             disable_web_page_preview=False
         )
-        return True, f"Опубликован пост рубрики «{rubric['category']}»!"
+        return True, f"Опубликован пост рубрики «{rubric['category']}» (без фото)!"
     except Exception as e:
         return False, f"Ошибка отправки: {e}"
 
