@@ -171,13 +171,12 @@ def generate_kie_text_and_prompt(user_prompt: str) -> tuple[str, str]:
     last_error = ""
     for url in urls:
         try:
-            logging.info(f"Запрос в KIE.ai Gemini 3.7...")
-            resp = requests.post(url, headers=headers, json=payload, timeout=45, stream=True)
+            logging.info("Запрос в KIE.ai Gemini 3.7...")
+            resp = requests.post(url, headers=headers, json=payload, timeout=45)
             if resp.status_code == 200:
                 raw_text = resp.text
                 full_text = ""
 
-                # Если пришел поток SSE/JSON
                 try:
                     data = resp.json()
                     if isinstance(data, list):
@@ -186,11 +185,12 @@ def generate_kie_text_and_prompt(user_prompt: str) -> tuple[str, str]:
                             if parts:
                                 full_text += parts[0].get("text", "")
                     elif isinstance(data, dict):
-                        parts = data.get("candidates", [{}])[0].get("content", {}).get("parts", [])
-                        if parts:
-                            full_text = parts[0].get("text", "")
+                        candidates = data.get("candidates", [])
+                        if candidates:
+                            parts = candidates[0].get("content", {}).get("parts", [])
+                            if parts:
+                                full_text += parts[0].get("text", "")
                 except Exception:
-                    # Построчный разбор потока
                     matches = re.findall(r'"text":\s*"((?:[^"\\]|\\.)*)"', raw_text)
                     if matches:
                         full_text = "".join(matches).encode('utf-8').decode('unicode_escape')
@@ -198,12 +198,40 @@ def generate_kie_text_and_prompt(user_prompt: str) -> tuple[str, str]:
                 if not full_text:
                     full_text = raw_text
 
-                match = re.search(r'\{.*\}', full_text, re.DOTALL)
+                # Снимаем возможное markdown-обрамление
+                clean_json_str = full_text.strip()
+                if clean_json_str.startswith("```json"):
+                    clean_json_str = clean_json_str[7:]
+                if clean_json_str.startswith("```"):
+                    clean_json_str = clean_json_str[3:]
+                if clean_json_str.endswith("```"):
+                    clean_json_str = clean_json_str[:-3]
+                clean_json_str = clean_json_str.strip()
+
+                match = re.search(r'\{[\s\S]*\}', clean_json_str)
                 if match:
-                    parsed = json.loads(match.group(0))
-                    return parsed.get("post_text"), parsed.get("image_prompt")
-                
-                return full_text, "healthy cardiology food lifestyle"
+                    try:
+                        parsed = json.loads(match.group(0))
+                        post_text = (
+                            parsed.get("post_text")
+                            or parsed.get("text")
+                            or parsed.get("post")
+                            or parsed.get("content")
+                            or parsed.get("message")
+                        )
+                        image_prompt = (
+                            parsed.get("image_prompt")
+                            or parsed.get("prompt")
+                            or parsed.get("image")
+                            or "healthy cardiology food lifestyle"
+                        )
+                        if post_text:
+                            return str(post_text).strip(), str(image_prompt).strip()
+                    except Exception as json_err:
+                        logging.warning(f"Ошибка json.loads: {json_err}")
+
+                if full_text and len(full_text.strip()) > 30:
+                    return full_text.strip(), "healthy cardiology food lifestyle"
             else:
                 last_error = f"HTTP {resp.status_code}: {resp.text[:150]}"
         except Exception as e:
@@ -213,7 +241,7 @@ def generate_kie_text_and_prompt(user_prompt: str) -> tuple[str, str]:
     raise Exception(f"KIE.ai Gemini 3.7 ошибка: {last_error}")
 
 async def generate_kie_image_bytes(image_prompt: str) -> bytes:
-    if not KIE_KEY:
+    if not KIE_KEY or not image_prompt:
         return None
 
     create_url = "https://api.kie.ai/api/v1/jobs/createTask"
@@ -235,7 +263,7 @@ async def generate_kie_image_bytes(image_prompt: str) -> bytes:
     }
 
     try:
-        logging.info(f"Создание задачи Nano Banana 2 Lite в KIE.ai...")
+        logging.info("Создание задачи Nano Banana 2 Lite в KIE.ai...")
         resp = requests.post(create_url, headers=headers, json=payload, timeout=25)
         if resp.status_code == 200:
             res_data = resp.json()
@@ -518,6 +546,11 @@ def fetch_pubmed_study_with_abstract(query: str) -> dict:
     return None
 
 def sanitize_html_for_telegram(text: str) -> str:
+    if not text:
+        return ""
+    if not isinstance(text, str):
+        text = str(text)
+
     allowed_tags = ['<b>', '</b>', '<i>', '</i>', '<code>', '</code>', '</a>']
     placeholders = {}
     
@@ -608,6 +641,8 @@ async def generate_and_publish_post(custom_rubric: dict = None) -> tuple[bool, s
 
     try:
         post_text, image_prompt = generate_kie_text_and_prompt(prompt)
+        if not post_text:
+            return False, "Ошибка: модель вернула пустой текст поста."
     except Exception as e:
         return False, f"Ошибка генерации: {e}"
 
