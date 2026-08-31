@@ -1,6 +1,7 @@
 import os
 import re
 import io
+import time
 import json
 import urllib.parse
 import imaplib
@@ -138,7 +139,6 @@ SYSTEM_PROMPT = """
 """
 
 def generate_kie_text_and_prompt(user_prompt: str) -> tuple[str, str]:
-    """Генерация через официальный Gemini 3.7 эндпоинт KIE.ai."""
     if not KIE_KEY:
         raise ValueError("KIE_API_KEY не установлен в переменных Render!")
 
@@ -171,13 +171,12 @@ def generate_kie_text_and_prompt(user_prompt: str) -> tuple[str, str]:
     last_error = ""
     for url in urls:
         try:
-            logging.info(f"Запрос текста в KIE.ai Gemini 3.7: {url}...")
+            logging.info(f"Запрос в KIE.ai Gemini 3.7: {url}...")
             resp = requests.post(url, headers=headers, json=payload, timeout=25)
             if resp.status_code == 200:
                 data = resp.json()
                 text_content = ""
                 
-                # Обработка стандартного Google/KIE ответа
                 if isinstance(data, list):
                     for chunk in data:
                         candidates = chunk.get("candidates", [])
@@ -209,8 +208,7 @@ def generate_kie_text_and_prompt(user_prompt: str) -> tuple[str, str]:
 
     raise Exception(f"Ошибка KIE.ai Gemini 3.7: {last_error}")
 
-def generate_kie_image_bytes(image_prompt: str) -> bytes:
-    """Генерация фото через Nano Banana 2 Lite в KIE.ai (Jobs API)."""
+async def generate_kie_image_bytes(image_prompt: str) -> bytes:
     if not KIE_KEY:
         return None
 
@@ -239,14 +237,12 @@ def generate_kie_image_bytes(image_prompt: str) -> bytes:
             res_data = resp.json()
             task_id = res_data.get("data", {}).get("taskId") or res_data.get("taskId") or res_data.get("id")
 
-            # Если картинка отдалась сразу в ответе
             direct_url = res_data.get("data", {}).get("url") or res_data.get("data", {}).get("image_url")
             if direct_url:
                 img_res = requests.get(direct_url, timeout=15)
                 if img_res.status_code == 200:
                     return img_res.content
 
-            # Если задача поставлена в очередь — опрашиваем статус
             if task_id:
                 status_urls = [
                     f"https://api.kie.ai/api/v1/jobs/getTask?taskId={task_id}",
@@ -612,7 +608,7 @@ async def generate_and_publish_post(custom_rubric: dict = None) -> tuple[bool, s
         return False, f"Ошибка генерации: {e}"
 
     if not img_bytes and image_prompt:
-        img_bytes = generate_kie_image_bytes(image_prompt)
+        img_bytes = await generate_kie_image_bytes(image_prompt)
 
     try:
         clean_html = sanitize_html_for_telegram(post_text)
