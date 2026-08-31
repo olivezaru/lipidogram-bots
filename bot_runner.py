@@ -138,103 +138,149 @@ SYSTEM_PROMPT = """
 """
 
 def generate_kie_text_and_prompt(user_prompt: str) -> tuple[str, str]:
-    """Генерирует текст поста через KIE.ai API (Gemini 3.7)."""
+    """Генерация через официальный Gemini 3.7 эндпоинт KIE.ai."""
     if not KIE_KEY:
         raise ValueError("KIE_API_KEY не установлен в переменных Render!")
 
-    endpoints = [
-        "https://api.kie.ai/v1/chat/completions",
-        "https://api.kie.ai/chat/completions"
+    urls = [
+        "https://api.kie.ai/gemini/v1/models/gemini-3-7-flash:generateContent",
+        "https://api.kie.ai/gemini/v1/models/gemini-3.7-flash:generateContent",
+        "https://api.kie.ai/gemini/v1/models/gemini-3-7-flash:streamGenerateContent"
     ]
+    
     headers = {
         "Authorization": f"Bearer {KIE_KEY}",
+        "x-goog-api-key": KIE_KEY,
         "Content-Type": "application/json"
     }
 
-    models_to_try = [
-        "gemini-3.7-flash",
-        "google/gemini-3.7-flash",
-        "gemini-3.6-flash"
-    ]
+    payload = {
+        "contents": [
+            {
+                "parts": [
+                    {"text": f"{SYSTEM_PROMPT}\n\nЗАДАНИЕ:\n{user_prompt}"}
+                ]
+            }
+        ],
+        "generationConfig": {
+            "temperature": 0.75,
+            "responseMimeType": "application/json"
+        }
+    }
 
-    last_details = "Нет ответа"
+    last_error = ""
+    for url in urls:
+        try:
+            logging.info(f"Запрос текста в KIE.ai Gemini 3.7: {url}...")
+            resp = requests.post(url, headers=headers, json=payload, timeout=25)
+            if resp.status_code == 200:
+                data = resp.json()
+                text_content = ""
+                
+                # Обработка стандартного Google/KIE ответа
+                if isinstance(data, list):
+                    for chunk in data:
+                        candidates = chunk.get("candidates", [])
+                        if candidates:
+                            parts = candidates[0].get("content", {}).get("parts", [])
+                            if parts:
+                                text_content += parts[0].get("text", "")
+                elif isinstance(data, dict):
+                    candidates = data.get("candidates", [])
+                    if candidates:
+                        parts = candidates[0].get("content", {}).get("parts", [])
+                        if parts:
+                            text_content = parts[0].get("text", "")
+                    elif "choices" in data:
+                        text_content = data["choices"][0]["message"]["content"]
 
-    for url in endpoints:
-        for model in models_to_try:
-            try:
-                logging.info(f"Запрос в KIE.ai: URL={url}, model={model}...")
-                payload = {
-                    "model": model,
-                    "messages": [
-                        {"role": "system", "content": SYSTEM_PROMPT},
-                        {"role": "user", "content": user_prompt}
-                    ],
-                    "temperature": 0.75
-                }
-                resp = requests.post(url, headers=headers, json=payload, timeout=25)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    content = data["choices"][0]["message"]["content"]
-                    match = re.search(r'\{.*\}', content, re.DOTALL)
+                if text_content:
+                    match = re.search(r'\{.*\}', text_content, re.DOTALL)
                     if match:
                         parsed = json.loads(match.group(0))
                         return parsed.get("post_text"), parsed.get("image_prompt")
-                    else:
-                        return content, "healthy cardiology food lifestyle"
-                else:
-                    last_details = f"HTTP {resp.status_code}: {resp.text[:200]}"
-                    logging.warning(f"KIE.ai ({model}) -> {last_details}")
-            except Exception as e:
-                last_details = str(e)
-                logging.warning(f"Ошибка запроса KIE.ai: {e}")
-                continue
+                    return text_content, "healthy lifestyle cardiology food"
+            else:
+                last_error = f"{url} -> HTTP {resp.status_code}: {resp.text[:150]}"
+                logging.warning(f"Ошибка Gemini KIE: {last_error}")
+        except Exception as e:
+            last_error = str(e)
+            continue
 
-    raise Exception(f"Ответ KIE.ai: {last_details}")
+    raise Exception(f"Ошибка KIE.ai Gemini 3.7: {last_error}")
 
 def generate_kie_image_bytes(image_prompt: str) -> bytes:
-    """Генерирует изображение через Nano Banana 2 Lite в KIE.ai."""
+    """Генерация фото через Nano Banana 2 Lite в KIE.ai (Jobs API)."""
     if not KIE_KEY:
         return None
 
-    endpoints = [
-        "https://api.kie.ai/v1/images/generations",
-        "https://api.kie.ai/images/generations"
-    ]
+    create_url = "https://api.kie.ai/api/v1/jobs/createTask"
     headers = {
         "Authorization": f"Bearer {KIE_KEY}",
         "Content-Type": "application/json"
     }
-    
-    clean_p = f"Professional commercial photography, 8k, photorealistic, {image_prompt}"
-    models = ["nano-banana-2-lite", "nano-banana", "nanobanana-2-lite"]
 
-    for url in endpoints:
-        for b_model in models:
-            payload = {
-                "model": b_model,
-                "prompt": clean_p,
-                "n": 1,
-                "size": "1024x1024"
-            }
-            try:
-                logging.info(f"Генерация фото в KIE.ai ({b_model})...")
-                resp = requests.post(url, headers=headers, json=payload, timeout=30)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    image_url = None
-                    if "data" in data and len(data["data"]) > 0:
-                        image_url = data["data"][0].get("url")
-                    elif "images" in data and len(data["images"]) > 0:
-                        image_url = data["images"][0].get("url")
+    clean_prompt = f"Professional commercial photography, 8k resolution, photorealistic, {image_prompt}"
 
-                    if image_url:
-                        img_resp = requests.get(image_url, timeout=15)
-                        if img_resp.status_code == 200 and len(img_resp.content) > 3000:
-                            return img_resp.content
-                else:
-                    logging.warning(f"KIE Image API ({b_model}) status {resp.status_code}: {resp.text[:150]}")
-            except Exception as e:
-                logging.warning(f"Ошибка фото KIE ({b_model}): {e}")
+    payload = {
+        "model": "nano-banana-2-lite",
+        "input": {
+            "prompt": clean_prompt,
+            "width": 1024,
+            "height": 1024,
+            "image_num": 1
+        }
+    }
+
+    try:
+        logging.info(f"Создание задачи Nano Banana 2 Lite в KIE.ai...")
+        resp = requests.post(create_url, headers=headers, json=payload, timeout=20)
+        if resp.status_code == 200:
+            res_data = resp.json()
+            task_id = res_data.get("data", {}).get("taskId") or res_data.get("taskId") or res_data.get("id")
+
+            # Если картинка отдалась сразу в ответе
+            direct_url = res_data.get("data", {}).get("url") or res_data.get("data", {}).get("image_url")
+            if direct_url:
+                img_res = requests.get(direct_url, timeout=15)
+                if img_res.status_code == 200:
+                    return img_res.content
+
+            # Если задача поставлена в очередь — опрашиваем статус
+            if task_id:
+                status_urls = [
+                    f"https://api.kie.ai/api/v1/jobs/getTask?taskId={task_id}",
+                    f"https://api.kie.ai/api/v1/jobs/record/{task_id}",
+                    f"https://api.kie.ai/api/v1/jobs/{task_id}"
+                ]
+                
+                for _ in range(8):
+                    await asyncio.sleep(2.5)
+                    for s_url in status_urls:
+                        try:
+                            s_resp = requests.get(s_url, headers=headers, timeout=10)
+                            if s_resp.status_code == 200:
+                                s_data = s_resp.json()
+                                result_data = s_data.get("data", {})
+                                state = result_data.get("state") or result_data.get("status") or s_data.get("status")
+
+                                if state in ["SUCCESS", "COMPLETED", "success", "completed", 1]:
+                                    img_url = (
+                                        result_data.get("result") 
+                                        or result_data.get("url") 
+                                        or result_data.get("image_url")
+                                        or (result_data.get("images", []) and result_data["images"][0])
+                                    )
+                                    if img_url and isinstance(img_url, str) and img_url.startswith("http"):
+                                        img_res = requests.get(img_url, timeout=15)
+                                        if img_res.status_code == 200 and len(img_res.content) > 3000:
+                                            return img_res.content
+                        except Exception:
+                            continue
+        else:
+            logging.warning(f"KIE Nano Banana createTask status {resp.status_code}: {resp.text[:150]}")
+    except Exception as e:
+        logging.warning(f"Ошибка Nano Banana 2 Lite: {e}")
 
     return None
 
@@ -590,7 +636,7 @@ async def generate_and_publish_post(custom_rubric: dict = None) -> tuple[bool, s
                     disable_web_page_preview=False
                 )
             logging.info(f"Пост опубликован через KIE.ai! ID: {sent_msg.message_id}")
-            return True, f"Опубликован пост («{rubric['category']}» / стиль: {style}) с иллюстрацией!"
+            return True, f"Опубликован пост («{rubric['category']}» / стиль: {style}) с иллюстрацией Nano Banana!"
 
         sent_msg = await bot_poster.send_message(
             chat_id=CHANNEL_ID,
@@ -602,14 +648,12 @@ async def generate_and_publish_post(custom_rubric: dict = None) -> tuple[bool, s
     except Exception as e:
         return False, f"Ошибка отправки: {e}"
 
-# --- Команды бота ---
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     await message.reply(
-        "🫀 Медиа-бот «Липидограм» подключен к вашему тарифу KIE.ai!\n\n"
-        "• 🚀 Тексты: Gemini 3.7 Flash.\n"
-        "• 🍌 Иллюстрации: Nano Banana 2 Lite.\n"
-        "• 🏃 Человеческий язык без непонятных терминов.\n\n"
+        "🫀 Медиа-бот «Липидограм» подключен к вашим моделям KIE.ai!\n\n"
+        "• 🚀 Текст: Gemini 3.7 Flash.\n"
+        "• 🍌 Арт: Nano Banana 2 Lite.\n\n"
         "Команды:\n"
         "• /post_now — публикация по расписанию.\n"
         "• /post_youtube — видеовыжимка мировых экспертов.\n"
@@ -619,7 +663,7 @@ async def cmd_start(message: types.Message):
 
 @dp.message(Command("post_now"))
 async def cmd_post_now(message: types.Message):
-    await message.reply("⏳ KIE.ai формирует пост и генерирует иллюстрацию...")
+    await message.reply("⏳ Gemini 3.7 формирует пост, а Nano Banana 2 Lite создает арт...")
     success, res = await generate_and_publish_post()
     await message.reply("✅ " + res if success else "❌ " + res)
 
@@ -631,17 +675,16 @@ async def cmd_post_yt(message: types.Message):
 
 @dp.message(Command("post_recipe"))
 async def cmd_post_rec(message: types.Message):
-    await message.reply("🥗 KIE.ai генерирует фото блюда и рецепт...")
+    await message.reply("🥗 Nano Banana 2 Lite генерирует фото блюда и рецепт...")
     success, res = await generate_and_publish_post(RUBRIC_RECIPES)
     await message.reply("✅ " + res if success else "❌ " + res)
 
 @dp.message(Command("post_myth"))
 async def cmd_post_my(message: types.Message):
-    await message.reply("💡 Gemini 3.7 развенчивает миф, а Nano Banana создает арт...")
+    await message.reply("💡 Gemini 3.7 развенчивает миф...")
     success, res = await generate_and_publish_post(RUBRIC_MYTHS)
     await message.reply("✅ " + res if success else "❌ " + res)
 
-# --- Модерация комментариев ---
 @dp.message(F.text)
 async def handle_comment(message: types.Message):
     if message.chat.type == "private":
