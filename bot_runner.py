@@ -143,9 +143,9 @@ def generate_kie_text_and_prompt(user_prompt: str) -> tuple[str, str]:
         raise ValueError("KIE_API_KEY не установлен в переменных Render!")
 
     urls = [
-        "https://api.kie.ai/gemini/v1/models/gemini-3-7-flash:generateContent",
-        "https://api.kie.ai/gemini/v1/models/gemini-3.7-flash:generateContent",
-        "https://api.kie.ai/gemini/v1/models/gemini-3-7-flash:streamGenerateContent"
+        f"https://api.kie.ai/gemini/v1/models/gemini-3-7-flash:generateContent?key={KIE_KEY}",
+        f"https://api.kie.ai/gemini/v1/models/gemini-3.7-flash:generateContent?key={KIE_KEY}",
+        f"https://api.kie.ai/gemini/v1/models/gemini-3-7-flash:streamGenerateContent?key={KIE_KEY}"
     ]
     
     headers = {
@@ -171,42 +171,46 @@ def generate_kie_text_and_prompt(user_prompt: str) -> tuple[str, str]:
     last_error = ""
     for url in urls:
         try:
-            logging.info(f"Запрос в KIE.ai Gemini 3.7: {url}...")
-            resp = requests.post(url, headers=headers, json=payload, timeout=25)
+            logging.info(f"Запрос в KIE.ai Gemini 3.7...")
+            resp = requests.post(url, headers=headers, json=payload, timeout=45, stream=True)
             if resp.status_code == 200:
-                data = resp.json()
-                text_content = ""
-                
-                if isinstance(data, list):
-                    for chunk in data:
-                        candidates = chunk.get("candidates", [])
-                        if candidates:
-                            parts = candidates[0].get("content", {}).get("parts", [])
-                            if parts:
-                                text_content += parts[0].get("text", "")
-                elif isinstance(data, dict):
-                    candidates = data.get("candidates", [])
-                    if candidates:
-                        parts = candidates[0].get("content", {}).get("parts", [])
-                        if parts:
-                            text_content = parts[0].get("text", "")
-                    elif "choices" in data:
-                        text_content = data["choices"][0]["message"]["content"]
+                raw_text = resp.text
+                full_text = ""
 
-                if text_content:
-                    match = re.search(r'\{.*\}', text_content, re.DOTALL)
-                    if match:
-                        parsed = json.loads(match.group(0))
-                        return parsed.get("post_text"), parsed.get("image_prompt")
-                    return text_content, "healthy lifestyle cardiology food"
+                # Если пришел поток SSE/JSON
+                try:
+                    data = resp.json()
+                    if isinstance(data, list):
+                        for chunk in data:
+                            parts = chunk.get("candidates", [{}])[0].get("content", {}).get("parts", [])
+                            if parts:
+                                full_text += parts[0].get("text", "")
+                    elif isinstance(data, dict):
+                        parts = data.get("candidates", [{}])[0].get("content", {}).get("parts", [])
+                        if parts:
+                            full_text = parts[0].get("text", "")
+                except Exception:
+                    # Построчный разбор потока
+                    matches = re.findall(r'"text":\s*"((?:[^"\\]|\\.)*)"', raw_text)
+                    if matches:
+                        full_text = "".join(matches).encode('utf-8').decode('unicode_escape')
+
+                if not full_text:
+                    full_text = raw_text
+
+                match = re.search(r'\{.*\}', full_text, re.DOTALL)
+                if match:
+                    parsed = json.loads(match.group(0))
+                    return parsed.get("post_text"), parsed.get("image_prompt")
+                
+                return full_text, "healthy cardiology food lifestyle"
             else:
-                last_error = f"{url} -> HTTP {resp.status_code}: {resp.text[:150]}"
-                logging.warning(f"Ошибка Gemini KIE: {last_error}")
+                last_error = f"HTTP {resp.status_code}: {resp.text[:150]}"
         except Exception as e:
             last_error = str(e)
             continue
 
-    raise Exception(f"Ошибка KIE.ai Gemini 3.7: {last_error}")
+    raise Exception(f"KIE.ai Gemini 3.7 ошибка: {last_error}")
 
 async def generate_kie_image_bytes(image_prompt: str) -> bytes:
     if not KIE_KEY:
@@ -232,7 +236,7 @@ async def generate_kie_image_bytes(image_prompt: str) -> bytes:
 
     try:
         logging.info(f"Создание задачи Nano Banana 2 Lite в KIE.ai...")
-        resp = requests.post(create_url, headers=headers, json=payload, timeout=20)
+        resp = requests.post(create_url, headers=headers, json=payload, timeout=25)
         if resp.status_code == 200:
             res_data = resp.json()
             task_id = res_data.get("data", {}).get("taskId") or res_data.get("taskId") or res_data.get("id")
