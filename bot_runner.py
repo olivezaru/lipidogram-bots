@@ -171,7 +171,7 @@ async def generate_kie_text_and_prompt(user_prompt: str) -> tuple[str, str]:
     async with aiohttp.ClientSession() as session:
         for target_url in urls:
             try:
-                logging.info("Отправка асинхронного запроса в KIE.ai Gemini 3.7 Flash...")
+                logging.info("Отправка запроса в KIE.ai Gemini 3.7 Flash...")
                 async with session.post(target_url, headers=headers, json=payload, timeout=aiohttp.ClientTimeout(total=40)) as resp:
                     if resp.status == 200:
                         raw_json = await resp.json()
@@ -220,54 +220,28 @@ async def generate_kie_text_and_prompt(user_prompt: str) -> tuple[str, str]:
 
     raise Exception(f"KIE.ai Gemini 3.7 ошибка: {last_error}")
 
-def extract_image_url_from_kie_response(data: dict) -> str:
-    """Извлекает URL картинки из любых структур ответов KIE.ai."""
-    if not isinstance(data, dict):
-        return None
+def extract_all_urls_from_any_json(obj) -> list:
+    """Рекурсивно ищет любые прямые ссылки на изображения в структуре ответа."""
+    found = []
+    if isinstance(obj, str):
+        if obj.startswith("http") and any(ext in obj.lower() for ext in [".jpg", ".jpeg", ".png", ".webp", "kie", "cdn", "image", "oss"]):
+            found.append(obj)
+        elif obj.startswith("{") or obj.startswith("["):
+            try:
+                parsed = json.loads(obj)
+                found.extend(extract_all_urls_from_any_json(parsed))
+            except Exception:
+                pass
+    elif isinstance(obj, dict):
+        for k, v in obj.items():
+            found.extend(extract_all_urls_from_any_json(v))
+    elif isinstance(obj, list):
+        for item in obj:
+            found.extend(extract_all_urls_from_any_json(item))
+    return found
 
-    result_data = data.get("data", {}) if isinstance(data.get("data"), dict) else data
-
-    candidates = [
-        result_data.get("result"),
-        result_data.get("url"),
-        result_data.get("image_url"),
-        result_data.get("imageUrl"),
-        data.get("result"),
-        data.get("url"),
-        data.get("image_url")
-    ]
-
-    for item in candidates:
-        if isinstance(item, str) and item.startswith("http"):
-            return item
-        if isinstance(item, dict):
-            u = item.get("url") or item.get("image_url") or item.get("imageUrl")
-            if u and isinstance(u, str) and u.startswith("http"):
-                return u
-
-    for list_key in ["images", "output", "results", "data", "resultInfo"]:
-        arr = result_data.get(list_key) or data.get(list_key)
-        if isinstance(arr, list) and len(arr) > 0:
-            first = arr[0]
-            if isinstance(first, str) and first.startswith("http"):
-                return first
-            if isinstance(first, dict):
-                u = first.get("url") or first.get("image_url") or first.get("imageUrl")
-                if u and isinstance(u, str) and u.startswith("http"):
-                    return u
-
-    res_str = result_data.get("result")
-    if isinstance(res_str, str) and (res_str.startswith("{") or res_str.startswith("[")):
-        try:
-            parsed_inner = json.loads(res_str)
-            return extract_image_url_from_kie_response(parsed_inner if isinstance(parsed_inner, dict) else {"images": parsed_inner})
-        except Exception:
-            pass
-
-    return None
-
-async def generate_kie_image(image_prompt: str) -> str:
-    """Асинхронно генерирует арт в Nano Banana 2 Lite и ожидает готовности до 90 секунд."""
+async def generate_kie_image_bytes(image_prompt: str) -> bytes:
+    """Создает задачу в Nano Banana 2 Lite и ожидает готовности файла до 100 секунд."""
     if not KIE_KEY or not image_prompt:
         return None
 
@@ -301,6 +275,17 @@ async def generate_kie_image(image_prompt: str) -> str:
 
                 res_data = await resp.json()
 
+            logging.info(f"Ответ createTask от KIE: {res_data}")
+
+            # Проверяем, отдана ли картинка сразу
+            immediate_urls = extract_all_urls_from_any_json(res_data)
+            if immediate_urls:
+                img_url = immediate_urls[0]
+                logging.info(f"Картинка получена сразу: {img_url}")
+                async with session.get(img_url, timeout=aiohttp.ClientTimeout(total=25)) as dl:
+                    if dl.status == 200:
+                        return await dl.read()
+
             task_id = (
                 res_data.get("data", {}).get("taskId") 
                 or res_data.get("data", {}).get("id") 
@@ -308,57 +293,54 @@ async def generate_kie_image(image_prompt: str) -> str:
                 or res_data.get("id")
             )
 
-            direct_url = extract_image_url_from_kie_response(res_data)
-            if direct_url:
-                logging.info(f"Nano Banana вернула URL сразу: {direct_url}")
-                return direct_url
-
             if not task_id:
                 logging.warning(f"Не найден taskId в ответе KIE: {res_data}")
                 return None
 
-            logging.info(f"Задача создана (TaskId: {task_id}). Ожидание генерации Nano Banana (до 90 сек)...")
+            logging.info(f"Задача создана (TaskId: {task_id}). Ожидание генерации Nano Banana (до 100 сек)...")
 
+            # Список эндпоинтов для опроса статуса задачи
             status_urls = [
+                f"https://api.kie.ai/api/v1/jobs/recordInfo?taskId={task_id}",
                 f"https://api.kie.ai/api/v1/jobs/getTask?taskId={task_id}",
                 f"https://api.kie.ai/api/v1/jobs/{task_id}",
                 f"https://api.kie.ai/api/v1/jobs/record/{task_id}"
             ]
 
-            # 30 циклов по 3 секунды = 90 секунд ожидания
-            for attempt in range(1, 31):
-                await asyncio.sleep(3)
+            # 25 циклов по 4 секунды = 100 секунд
+            for attempt in range(1, 26):
+                await asyncio.sleep(4)
                 for s_url in status_urls:
                     try:
-                        async with session.get(s_url, headers=headers, timeout=aiohttp.ClientTimeout(total=12)) as s_resp:
+                        async with session.get(s_url, headers=headers, timeout=aiohttp.ClientTimeout(total=15)) as s_resp:
                             if s_resp.status == 200:
                                 s_data = await s_resp.json()
-                                result_data = s_data.get("data", {}) if isinstance(s_data.get("data"), dict) else s_data
                                 
-                                state = str(
-                                    result_data.get("state") 
-                                    or result_data.get("status") 
-                                    or s_data.get("status") 
-                                    or s_data.get("state") 
-                                    or ""
-                                ).lower()
+                                # Ищем ссылки в ответе
+                                urls_in_status = extract_all_urls_from_any_json(s_data)
+                                if urls_in_status:
+                                    final_img_url = urls_in_status[0]
+                                    logging.info(f"УСПЕХ! Найдена готовая картинка KIE: {final_img_url}. Скачивание...")
+                                    async with session.get(final_img_url, timeout=aiohttp.ClientTimeout(total=30)) as dl:
+                                        if dl.status == 200:
+                                            b_data = await dl.read()
+                                            if len(b_data) > 2000:
+                                                logging.info(f"Картинка успешно скачана! Размер: {len(b_data)} байт")
+                                                return b_data
 
-                                logging.info(f"Статус Nano Banana (шаг {attempt}/30): {state}")
+                                # Логируем текущий статус
+                                result_data = s_data.get("data", {}) if isinstance(s_data.get("data"), dict) else s_data
+                                state = str(result_data.get("state") or result_data.get("status") or s_data.get("status") or "").lower()
+                                logging.info(f"Статус Nano Banana (шаг {attempt}/25): {state}")
 
-                                if state in ["success", "completed", "done", "1"]:
-                                    found_url = extract_image_url_from_kie_response(s_data)
-                                    if found_url:
-                                        logging.info(f"УСПЕХ! Получен URL картинки от KIE: {found_url}")
-                                        return found_url
-
-                                elif state in ["failed", "error", "-1"]:
-                                    logging.warning(f"Генерация завершилась ошибкой на стороне KIE: {s_data}")
+                                if state in ["failed", "error", "-1"]:
+                                    logging.warning(f"Ошибка генерации на стороне KIE: {s_data}")
                                     return None
                     except Exception as loop_e:
                         logging.debug(f"Опрос статуса: {loop_e}")
                         continue
 
-            logging.warning("Превышен таймаут ожидания Nano Banana (90 секунд).")
+            logging.warning("Превышен таймаут ожидания Nano Banana (100 секунд).")
     except Exception as e:
         logging.warning(f"Ошибка вызова Nano Banana 2 Lite: {e}")
 
@@ -367,15 +349,8 @@ async def generate_kie_image(image_prompt: str) -> str:
 def fetch_global_youtube_video() -> dict:
     channel = random.choice(GLOBAL_HEALTH_CHANNELS)
     try:
-        channel_url = f"https://www.youtube.com/{channel['handle']}/videos"
-        headers = {"User-Agent": "Mozilla/5.0"}
-        resp = aiohttp.ClientSession() # dummy
-    except Exception:
-        pass
-
-    try:
-        headers = {"User-Agent": "Mozilla/5.0"}
         import urllib.request
+        headers = {"User-Agent": "Mozilla/5.0"}
         req = urllib.request.Request(f"https://www.youtube.com/{channel['handle']}/videos", headers=headers)
         with urllib.request.urlopen(req, timeout=8) as response:
             html = response.read().decode('utf-8', errors='ignore')
@@ -638,11 +613,19 @@ async def generate_and_publish_post(custom_rubric: dict = None) -> tuple[bool, s
     style = rubric.get("style_type", "expert_review")
     logging.info(f"Запуск рубрики: {rubric['category']} (стиль: {style})")
 
-    img_url = None
+    img_bytes = None
 
     if rubric.get("source_type") == "youtube":
         study = fetch_global_youtube_video()
-        img_url = study.get("image_url")
+        if study.get("image_url"):
+            try:
+                async with aiohttp.ClientSession() as yt_s:
+                    async with yt_s.get(study["image_url"], timeout=aiohttp.ClientTimeout(total=10)) as yt_r:
+                        if yt_r.status == 200:
+                            img_bytes = await yt_r.read()
+            except Exception:
+                pass
+
         prompt = (
             f"Напиши пост в стиле «{style}» для Telegram-канала «Липидограм» в рубрику «{rubric['category']}».\n"
             f"ТЕКСТ ВЫСТУПЛЕНИЯ СПИКЕРА:\n{study.get('content', '')}\n\n"
@@ -682,59 +665,33 @@ async def generate_and_publish_post(custom_rubric: dict = None) -> tuple[bool, s
     except Exception as e:
         return False, f"Ошибка генерации текста: {e}"
 
-    if not img_url and image_prompt:
-        img_url = await generate_kie_image(image_prompt)
+    if not img_bytes and image_prompt:
+        img_bytes = await generate_kie_image_bytes(image_prompt)
 
     try:
         clean_html = sanitize_html_for_telegram(post_text)
 
-        if img_url:
-            logging.info(f"Отправка поста с фото в Telegram: {img_url}")
-            try:
-                if len(clean_html) <= 1024:
-                    sent_msg = await bot_poster.send_photo(
-                        chat_id=CHANNEL_ID,
-                        photo=img_url,
-                        caption=clean_html,
-                        parse_mode="HTML"
-                    )
-                else:
-                    await bot_poster.send_photo(chat_id=CHANNEL_ID, photo=img_url)
-                    sent_msg = await bot_poster.send_message(
-                        chat_id=CHANNEL_ID,
-                        text=clean_html,
-                        parse_mode="HTML",
-                        disable_web_page_preview=False
-                    )
-                logging.info(f"Пост с фото опубликован успешно! ID: {sent_msg.message_id}")
-                return True, f"Опубликован пост («{rubric['category']}») с артом Nano Banana!"
-            except Exception as photo_err:
-                logging.warning(f"Ошибка прямой отправки URL фото ({photo_err}), качаем байты через aiohttp...")
-                try:
-                    async with aiohttp.ClientSession() as dl_session:
-                        async with dl_session.get(img_url, timeout=aiohttp.ClientTimeout(total=20)) as img_r:
-                            if img_r.status == 200:
-                                b_content = await img_r.read()
-                                file_input = BufferedInputFile(b_content, filename="post_art.jpg")
-                                if len(clean_html) <= 1024:
-                                    sent_msg = await bot_poster.send_photo(
-                                        chat_id=CHANNEL_ID,
-                                        photo=file_input,
-                                        caption=clean_html,
-                                        parse_mode="HTML"
-                                    )
-                                else:
-                                    await bot_poster.send_photo(chat_id=CHANNEL_ID, photo=file_input)
-                                    sent_msg = await bot_poster.send_message(
-                                        chat_id=CHANNEL_ID,
-                                        text=clean_html,
-                                        parse_mode="HTML"
-                                    )
-                                return True, f"Опубликован пост («{rubric['category']}») с артом!"
-                except Exception as b_err:
-                    logging.error(f"Не удалось отправить байты фото: {b_err}")
+        if img_bytes and len(img_bytes) > 2000:
+            photo_file = BufferedInputFile(img_bytes, filename="lipidogram_art.jpg")
+            
+            if len(clean_html) <= 1024:
+                sent_msg = await bot_poster.send_photo(
+                    chat_id=CHANNEL_ID,
+                    photo=photo_file,
+                    caption=clean_html,
+                    parse_mode="HTML"
+                )
+            else:
+                await bot_poster.send_photo(chat_id=CHANNEL_ID, photo=photo_file)
+                sent_msg = await bot_poster.send_message(
+                    chat_id=CHANNEL_ID,
+                    text=clean_html,
+                    parse_mode="HTML",
+                    disable_web_page_preview=False
+                )
+            logging.info(f"Пост с фото опубликован! ID: {sent_msg.message_id}")
+            return True, f"Опубликован пост («{rubric['category']}») с артом Nano Banana!"
 
-        # Если фото не удалось получить вовсе
         sent_msg = await bot_poster.send_message(
             chat_id=CHANNEL_ID,
             text=clean_html,
@@ -760,7 +717,7 @@ async def cmd_start(message: types.Message):
 
 @dp.message(Command("post_now"))
 async def cmd_post_now(message: types.Message):
-    await message.reply("⏳ Gemini 3.7 формирует пост, а Nano Banana 2 Lite создает арт (ожидание до 60-80 сек)...")
+    await message.reply("⏳ Gemini 3.7 формирует пост, а Nano Banana 2 Lite создает арт (ожидание до 60-90 сек)...")
     success, res = await generate_and_publish_post()
     await message.reply("✅ " + res if success else "❌ " + res)
 
@@ -772,7 +729,7 @@ async def cmd_post_yt(message: types.Message):
 
 @dp.message(Command("post_recipe"))
 async def cmd_post_rec(message: types.Message):
-    await message.reply("🥗 Nano Banana 2 Lite генерирует фото блюда и рецепт (ожидание до 60-80 сек)...")
+    await message.reply("🥗 Nano Banana 2 Lite генерирует фото блюда и рецепт (ожидание до 60-90 сек)...")
     success, res = await generate_and_publish_post(RUBRIC_RECIPES)
     await message.reply("✅ " + res if success else "❌ " + res)
 
