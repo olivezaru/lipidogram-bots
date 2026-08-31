@@ -9,13 +9,13 @@ import email
 from email.header import decode_header
 import asyncio
 import logging
-import requests
 import random
 import xml.etree.ElementTree as ET
 from bs4 import BeautifulSoup
 from youtube_transcript_api import YouTubeTranscriptApi
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
+import aiohttp
 from aiohttp import web
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.types import BufferedInputFile
@@ -138,7 +138,7 @@ SYSTEM_PROMPT = """
 }
 """
 
-def generate_kie_text_and_prompt(user_prompt: str) -> tuple[str, str]:
+async def generate_kie_text_and_prompt(user_prompt: str) -> tuple[str, str]:
     if not KIE_KEY:
         raise ValueError("KIE_API_KEY не установлен в переменных окружения!")
 
@@ -168,62 +168,63 @@ def generate_kie_text_and_prompt(user_prompt: str) -> tuple[str, str]:
     }
 
     last_error = ""
-    for target_url in urls:
-        try:
-            logging.info("Отправка запроса в KIE.ai Gemini 3.7 Flash...")
-            resp = requests.post(target_url, headers=headers, json=payload, timeout=40)
-            if resp.status_code == 200:
-                raw_json = resp.json()
-                
-                if isinstance(raw_json, dict) and (raw_json.get("code") in [500, 400, 401, 403] or "Server exception" in str(raw_json)):
-                    last_error = f"KIE error: {raw_json.get('msg', 'Server exception')}"
-                    continue
+    async with aiohttp.ClientSession() as session:
+        for target_url in urls:
+            try:
+                logging.info("Отправка асинхронного запроса в KIE.ai Gemini 3.7 Flash...")
+                async with session.post(target_url, headers=headers, json=payload, timeout=aiohttp.ClientTimeout(total=40)) as resp:
+                    if resp.status == 200:
+                        raw_json = await resp.json()
+                        
+                        if isinstance(raw_json, dict) and (raw_json.get("code") in [500, 400, 401, 403] or "Server exception" in str(raw_json)):
+                            last_error = f"KIE error: {raw_json.get('msg', 'Server exception')}"
+                            continue
 
-                candidates = raw_json.get("candidates", []) if isinstance(raw_json, dict) else []
-                if not candidates:
-                    continue
+                        candidates = raw_json.get("candidates", []) if isinstance(raw_json, dict) else []
+                        if not candidates:
+                            continue
 
-                content_parts = candidates[0].get("content", {}).get("parts", [])
-                if not content_parts:
-                    continue
+                        content_parts = candidates[0].get("content", {}).get("parts", [])
+                        if not content_parts:
+                            continue
 
-                raw_text = content_parts[0].get("text", "")
-                
-                clean_str = raw_text.strip()
-                if clean_str.startswith("```json"):
-                    clean_str = clean_str[7:]
-                if clean_str.startswith("```"):
-                    clean_str = clean_str[3:]
-                if clean_str.endswith("```"):
-                    clean_str = clean_str[:-3]
-                clean_str = clean_str.strip()
+                        raw_text = content_parts[0].get("text", "")
+                        
+                        clean_str = raw_text.strip()
+                        if clean_str.startswith("```json"):
+                            clean_str = clean_str[7:]
+                        if clean_str.startswith("```"):
+                            clean_str = clean_str[3:]
+                        if clean_str.endswith("```"):
+                            clean_str = clean_str[:-3]
+                        clean_str = clean_str.strip()
 
-                match = re.search(r'\{[\s\S]*\}', clean_str)
-                if match:
-                    parsed = json.loads(match.group(0))
-                    
-                    if "code" in parsed and "msg" in parsed:
-                        continue
+                        match = re.search(r'\{[\s\S]*\}', clean_str)
+                        if match:
+                            parsed = json.loads(match.group(0))
+                            
+                            if "code" in parsed and "msg" in parsed:
+                                continue
 
-                    post_text = parsed.get("post_text") or parsed.get("text") or parsed.get("post") or parsed.get("content")
-                    image_prompt = parsed.get("image_prompt") or parsed.get("prompt") or parsed.get("image")
-                    
-                    if post_text and len(str(post_text).strip()) > 50:
-                        return str(post_text).strip(), str(image_prompt or "healthy cardiology food lifestyle").strip()
-            else:
-                last_error = f"HTTP {resp.status_code}: {resp.text[:120]}"
-        except Exception as e:
-            last_error = str(e)
-            continue
+                            post_text = parsed.get("post_text") or parsed.get("text") or parsed.get("post") or parsed.get("content")
+                            image_prompt = parsed.get("image_prompt") or parsed.get("prompt") or parsed.get("image")
+                            
+                            if post_text and len(str(post_text).strip()) > 50:
+                                return str(post_text).strip(), str(image_prompt or "healthy cardiology food lifestyle").strip()
+                    else:
+                        text_err = await resp.text()
+                        last_error = f"HTTP {resp.status}: {text_err[:120]}"
+            except Exception as e:
+                last_error = str(e)
+                continue
 
     raise Exception(f"KIE.ai Gemini 3.7 ошибка: {last_error}")
 
 def extract_image_url_from_kie_response(data: dict) -> str:
-    """Извлекает URL картинки из любых возможных структур ответа KIE.ai."""
+    """Извлекает URL картинки из любых структур ответов KIE.ai."""
     if not isinstance(data, dict):
         return None
 
-    # Проверяем вложенные блоки
     result_data = data.get("data", {}) if isinstance(data.get("data"), dict) else data
 
     candidates = [
@@ -240,23 +241,21 @@ def extract_image_url_from_kie_response(data: dict) -> str:
         if isinstance(item, str) and item.startswith("http"):
             return item
         if isinstance(item, dict):
-            u = item.get("url") or item.get("image_url")
+            u = item.get("url") or item.get("image_url") or item.get("imageUrl")
             if u and isinstance(u, str) and u.startswith("http"):
                 return u
 
-    # Списки images / output / results
-    for list_key in ["images", "output", "results", "data"]:
+    for list_key in ["images", "output", "results", "data", "resultInfo"]:
         arr = result_data.get(list_key) or data.get(list_key)
         if isinstance(arr, list) and len(arr) > 0:
             first = arr[0]
             if isinstance(first, str) and first.startswith("http"):
                 return first
             if isinstance(first, dict):
-                u = first.get("url") or first.get("image_url")
+                u = first.get("url") or first.get("image_url") or first.get("imageUrl")
                 if u and isinstance(u, str) and u.startswith("http"):
                     return u
 
-    # Если результат запакован в JSON-строку
     res_str = result_data.get("result")
     if isinstance(res_str, str) and (res_str.startswith("{") or res_str.startswith("[")):
         try:
@@ -267,10 +266,10 @@ def extract_image_url_from_kie_response(data: dict) -> str:
 
     return None
 
-async def generate_kie_image(image_prompt: str) -> tuple[str, bytes]:
-    """Генерирует изображение в Nano Banana 2 Lite и возвращает (image_url, image_bytes)."""
+async def generate_kie_image(image_prompt: str) -> str:
+    """Асинхронно генерирует арт в Nano Banana 2 Lite и ожидает готовности до 90 секунд."""
     if not KIE_KEY or not image_prompt:
-        return None, None
+        return None
 
     create_url = "https://api.kie.ai/api/v1/jobs/createTask"
     headers = {
@@ -292,88 +291,95 @@ async def generate_kie_image(image_prompt: str) -> tuple[str, bytes]:
     }
 
     try:
-        logging.info(f"Создание задачи Nano Banana 2 Lite... Промпт: {clean_prompt[:60]}...")
-        resp = requests.post(create_url, headers=headers, json=payload, timeout=25)
-        if resp.status_code != 200:
-            logging.warning(f"KIE createTask HTTP {resp.status_code}: {resp.text[:150]}")
-            return None, None
+        async with aiohttp.ClientSession() as session:
+            logging.info(f"Создание задачи Nano Banana 2 Lite... Промпт: {clean_prompt[:60]}...")
+            async with session.post(create_url, headers=headers, json=payload, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+                if resp.status != 200:
+                    text_resp = await resp.text()
+                    logging.warning(f"KIE createTask HTTP {resp.status}: {text_resp[:150]}")
+                    return None
 
-        res_data = resp.json()
-        task_id = (
-            res_data.get("data", {}).get("taskId") 
-            or res_data.get("data", {}).get("id") 
-            or res_data.get("taskId") 
-            or res_data.get("id")
-        )
+                res_data = await resp.json()
 
-        # Проверяем мгновенную готовность
-        direct_url = extract_image_url_from_kie_response(res_data)
-        if direct_url:
-            logging.info(f"Nano Banana отдала URL сразу: {direct_url}")
-            return direct_url, None
+            task_id = (
+                res_data.get("data", {}).get("taskId") 
+                or res_data.get("data", {}).get("id") 
+                or res_data.get("taskId") 
+                or res_data.get("id")
+            )
 
-        if not task_id:
-            logging.warning(f"Не найден taskId в ответе KIE: {res_data}")
-            return None, None
+            direct_url = extract_image_url_from_kie_response(res_data)
+            if direct_url:
+                logging.info(f"Nano Banana вернула URL сразу: {direct_url}")
+                return direct_url
 
-        logging.info(f"Задача создана (TaskId: {task_id}). Ожидание завершения генерации в KIE...")
+            if not task_id:
+                logging.warning(f"Не найден taskId в ответе KIE: {res_data}")
+                return None
 
-        status_urls = [
-            f"https://api.kie.ai/api/v1/jobs/getTask?taskId={task_id}",
-            f"https://api.kie.ai/api/v1/jobs/{task_id}",
-            f"https://api.kie.ai/api/v1/jobs/record/{task_id}"
-        ]
+            logging.info(f"Задача создана (TaskId: {task_id}). Ожидание генерации Nano Banana (до 90 сек)...")
 
-        # Ожидаем до 60 секунд (20 циклов по 3 секунды)
-        for attempt in range(1, 21):
-            await asyncio.sleep(3)
-            for s_url in status_urls:
-                try:
-                    s_resp = requests.get(s_url, headers=headers, timeout=10)
-                    if s_resp.status_code == 200:
-                        s_data = s_resp.json()
-                        result_data = s_data.get("data", {}) if isinstance(s_data.get("data"), dict) else s_data
-                        
-                        state = str(
-                            result_data.get("state") 
-                            or result_data.get("status") 
-                            or s_data.get("status") 
-                            or s_data.get("state") 
-                            or ""
-                        ).lower()
+            status_urls = [
+                f"https://api.kie.ai/api/v1/jobs/getTask?taskId={task_id}",
+                f"https://api.kie.ai/api/v1/jobs/{task_id}",
+                f"https://api.kie.ai/api/v1/jobs/record/{task_id}"
+            ]
 
-                        logging.info(f"Статус Nano Banana (шаг {attempt}/20): {state}")
+            # 30 циклов по 3 секунды = 90 секунд ожидания
+            for attempt in range(1, 31):
+                await asyncio.sleep(3)
+                for s_url in status_urls:
+                    try:
+                        async with session.get(s_url, headers=headers, timeout=aiohttp.ClientTimeout(total=12)) as s_resp:
+                            if s_resp.status == 200:
+                                s_data = await s_resp.json()
+                                result_data = s_data.get("data", {}) if isinstance(s_data.get("data"), dict) else s_data
+                                
+                                state = str(
+                                    result_data.get("state") 
+                                    or result_data.get("status") 
+                                    or s_data.get("status") 
+                                    or s_data.get("state") 
+                                    or ""
+                                ).lower()
 
-                        if state in ["success", "completed", "done", "1"]:
-                            found_url = extract_image_url_from_kie_response(s_data)
-                            if found_url:
-                                logging.info(f"Получен URL готовой картинки KIE: {found_url}")
-                                return found_url, None
+                                logging.info(f"Статус Nano Banana (шаг {attempt}/30): {state}")
 
-                        elif state in ["failed", "error", "-1"]:
-                            logging.warning(f"Ошибка генерации в KIE: {s_data}")
-                            return None, None
-                except Exception as loop_e:
-                    logging.debug(f"Ошибка опроса статуса: {loop_e}")
-                    continue
+                                if state in ["success", "completed", "done", "1"]:
+                                    found_url = extract_image_url_from_kie_response(s_data)
+                                    if found_url:
+                                        logging.info(f"УСПЕХ! Получен URL картинки от KIE: {found_url}")
+                                        return found_url
 
-        logging.warning("Таймаут ожидания картинки Nano Banana 2 Lite.")
+                                elif state in ["failed", "error", "-1"]:
+                                    logging.warning(f"Генерация завершилась ошибкой на стороне KIE: {s_data}")
+                                    return None
+                    except Exception as loop_e:
+                        logging.debug(f"Опрос статуса: {loop_e}")
+                        continue
+
+            logging.warning("Превышен таймаут ожидания Nano Banana (90 секунд).")
     except Exception as e:
         logging.warning(f"Ошибка вызова Nano Banana 2 Lite: {e}")
 
-    return None, None
+    return None
 
 def fetch_global_youtube_video() -> dict:
     channel = random.choice(GLOBAL_HEALTH_CHANNELS)
     try:
         channel_url = f"https://www.youtube.com/{channel['handle']}/videos"
         headers = {"User-Agent": "Mozilla/5.0"}
-        resp = requests.get(channel_url, headers=headers, timeout=8)
-        
-        video_ids = []
-        if resp.status_code == 200:
-            matches = re.findall(r'"videoId":"([a-zA-Z0-9_-]{11})"', resp.text)
-            video_ids = list(dict.fromkeys(matches))
+        resp = aiohttp.ClientSession() # dummy
+    except Exception:
+        pass
+
+    try:
+        headers = {"User-Agent": "Mozilla/5.0"}
+        import urllib.request
+        req = urllib.request.Request(f"https://www.youtube.com/{channel['handle']}/videos", headers=headers)
+        with urllib.request.urlopen(req, timeout=8) as response:
+            html = response.read().decode('utf-8', errors='ignore')
+            video_ids = list(dict.fromkeys(re.findall(r'"videoId":"([a-zA-Z0-9_-]{11})"', html)))
 
         random.shuffle(video_ids)
 
@@ -478,10 +484,10 @@ def fetch_rko_news() -> dict:
 
     base_section_url = "https://scardio.ru/news/novosti_obschestva/"
     try:
-        headers = {"User-Agent": "Mozilla/5.0"}
-        resp = requests.get(base_section_url, headers=headers, timeout=8)
-        if resp.status_code == 200:
-            soup = BeautifulSoup(resp.text, "html.parser")
+        import urllib.request
+        req = urllib.request.Request(base_section_url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            soup = BeautifulSoup(resp.read().decode('utf-8', errors='ignore'), "html.parser")
             links = soup.find_all("a", href=True)
             valid_news = []
             for a in links:
@@ -495,9 +501,9 @@ def fetch_rko_news() -> dict:
                 selected = random.choice(valid_news[:10])
                 content_desc = ""
                 try:
-                    art_resp = requests.get(selected["url"], headers=headers, timeout=5)
-                    if art_resp.status_code == 200:
-                        art_soup = BeautifulSoup(art_resp.text, "html.parser")
+                    art_req = urllib.request.Request(selected["url"], headers={"User-Agent": "Mozilla/5.0"})
+                    with urllib.request.urlopen(art_req, timeout=5) as art_resp:
+                        art_soup = BeautifulSoup(art_resp.read().decode('utf-8', errors='ignore'), "html.parser")
                         paragraphs = [p.get_text(strip=True) for p in art_soup.find_all("p") if len(p.get_text(strip=True)) > 30]
                         content_desc = "\n".join(paragraphs[:4])
                 except Exception:
@@ -523,25 +529,12 @@ def fetch_rko_news() -> dict:
 
 def fetch_pubmed_study_with_abstract(query: str) -> dict:
     try:
-        search_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
-        params = {
-            "db": "pubmed",
-            "term": query,
-            "mindate": "2023/01/01",
-            "maxdate": "2026/12/31",
-            "datetype": "pdat",
-            "retmax": 10,
-            "sort": "pub_date",
-            "retmode": "json"
-        }
-        res = requests.get(search_url, params=params, timeout=7)
-        id_list = res.json().get("esearchresult", {}).get("idlist", [])
-
-        if not id_list:
-            params.pop("mindate", None)
-            params.pop("maxdate", None)
-            res = requests.get(search_url, params=params, timeout=7)
-            id_list = res.json().get("esearchresult", {}).get("idlist", [])
+        import urllib.request
+        search_url = f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&term={urllib.parse.quote(query)}&retmax=10&sort=pub_date&retmode=json"
+        req = urllib.request.Request(search_url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=7) as res:
+            data = json.loads(res.read().decode('utf-8'))
+            id_list = data.get("esearchresult", {}).get("idlist", [])
 
         if not id_list:
             return None
@@ -549,12 +542,12 @@ def fetch_pubmed_study_with_abstract(query: str) -> dict:
         random.shuffle(id_list)
 
         for pmid in id_list[:4]:
-            fetch_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi"
-            xml_res = requests.get(fetch_url, params={"db": "pubmed", "id": pmid, "retmode": "xml"}, timeout=7)
-            if xml_res.status_code != 200:
-                continue
+            fetch_url = f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=pubmed&id={pmid}&retmode=xml"
+            fetch_req = urllib.request.Request(fetch_url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(fetch_req, timeout=7) as xml_res:
+                xml_content = xml_res.read()
 
-            root = ET.fromstring(xml_res.content)
+            root = ET.fromstring(xml_content)
             article = root.find(".//Article")
             if article is None:
                 continue
@@ -632,7 +625,7 @@ def pick_rubric_by_schedule() -> dict:
 
 async def generate_and_publish_post(custom_rubric: dict = None) -> tuple[bool, str]:
     if not KIE_KEY:
-        err = "KIE_API_KEY не установлен в переменных Render!"
+        err = "KIE_API_KEY не установлен в переменных окружения!"
         logging.error(err)
         return False, err
 
@@ -683,22 +676,20 @@ async def generate_and_publish_post(custom_rubric: dict = None) -> tuple[bool, s
             )
 
     try:
-        post_text, image_prompt = generate_kie_text_and_prompt(prompt)
+        post_text, image_prompt = await generate_kie_text_and_prompt(prompt)
         if not post_text:
             return False, "Ошибка: модель вернула пустой текст поста."
     except Exception as e:
         return False, f"Ошибка генерации текста: {e}"
 
-    # Если это не YouTube, генерируем арт в Nano Banana 2 Lite
     if not img_url and image_prompt:
-        img_url, _ = await generate_kie_image(image_prompt)
+        img_url = await generate_kie_image(image_prompt)
 
     try:
         clean_html = sanitize_html_for_telegram(post_text)
 
-        # Если есть картинка от Nano Banana или YouTube
         if img_url:
-            logging.info(f"Отправка фото в канал {CHANNEL_ID}: {img_url}")
+            logging.info(f"Отправка поста с фото в Telegram: {img_url}")
             try:
                 if len(clean_html) <= 1024:
                     sent_msg = await bot_poster.send_photo(
@@ -715,33 +706,35 @@ async def generate_and_publish_post(custom_rubric: dict = None) -> tuple[bool, s
                         parse_mode="HTML",
                         disable_web_page_preview=False
                     )
-                logging.info(f"Пост с фото опубликован! ID: {sent_msg.message_id}")
+                logging.info(f"Пост с фото опубликован успешно! ID: {sent_msg.message_id}")
                 return True, f"Опубликован пост («{rubric['category']}») с артом Nano Banana!"
             except Exception as photo_err:
-                logging.warning(f"Не удалось отправить фото по URL ({photo_err}), скачиваем байты...")
+                logging.warning(f"Ошибка прямой отправки URL фото ({photo_err}), качаем байты через aiohttp...")
                 try:
-                    r_img = requests.get(img_url, timeout=15)
-                    if r_img.status_code == 200:
-                        file_input = BufferedInputFile(r_img.content, filename="post_art.jpg")
-                        if len(clean_html) <= 1024:
-                            sent_msg = await bot_poster.send_photo(
-                                chat_id=CHANNEL_ID,
-                                photo=file_input,
-                                caption=clean_html,
-                                parse_mode="HTML"
-                            )
-                        else:
-                            await bot_poster.send_photo(chat_id=CHANNEL_ID, photo=file_input)
-                            sent_msg = await bot_poster.send_message(
-                                chat_id=CHANNEL_ID,
-                                text=clean_html,
-                                parse_mode="HTML"
-                            )
-                        return True, f"Опубликован пост («{rubric['category']}») с артом!"
+                    async with aiohttp.ClientSession() as dl_session:
+                        async with dl_session.get(img_url, timeout=aiohttp.ClientTimeout(total=20)) as img_r:
+                            if img_r.status == 200:
+                                b_content = await img_r.read()
+                                file_input = BufferedInputFile(b_content, filename="post_art.jpg")
+                                if len(clean_html) <= 1024:
+                                    sent_msg = await bot_poster.send_photo(
+                                        chat_id=CHANNEL_ID,
+                                        photo=file_input,
+                                        caption=clean_html,
+                                        parse_mode="HTML"
+                                    )
+                                else:
+                                    await bot_poster.send_photo(chat_id=CHANNEL_ID, photo=file_input)
+                                    sent_msg = await bot_poster.send_message(
+                                        chat_id=CHANNEL_ID,
+                                        text=clean_html,
+                                        parse_mode="HTML"
+                                    )
+                                return True, f"Опубликован пост («{rubric['category']}») с артом!"
                 except Exception as b_err:
-                    logging.error(f"Ошибка отправки байтов фото: {b_err}")
+                    logging.error(f"Не удалось отправить байты фото: {b_err}")
 
-        # Если арт не сгенерировался, шлем просто текст
+        # Если фото не удалось получить вовсе
         sent_msg = await bot_poster.send_message(
             chat_id=CHANNEL_ID,
             text=clean_html,
@@ -767,7 +760,7 @@ async def cmd_start(message: types.Message):
 
 @dp.message(Command("post_now"))
 async def cmd_post_now(message: types.Message):
-    await message.reply("⏳ Gemini 3.7 формирует пост, а Nano Banana 2 Lite создает арт...")
+    await message.reply("⏳ Gemini 3.7 формирует пост, а Nano Banana 2 Lite создает арт (ожидание до 60-80 сек)...")
     success, res = await generate_and_publish_post()
     await message.reply("✅ " + res if success else "❌ " + res)
 
@@ -779,13 +772,13 @@ async def cmd_post_yt(message: types.Message):
 
 @dp.message(Command("post_recipe"))
 async def cmd_post_rec(message: types.Message):
-    await message.reply("🥗 Nano Banana 2 Lite генерирует фото блюда и рецепт...")
+    await message.reply("🥗 Nano Banana 2 Lite генерирует фото блюда и рецепт (ожидание до 60-80 сек)...")
     success, res = await generate_and_publish_post(RUBRIC_RECIPES)
     await message.reply("✅ " + res if success else "❌ " + res)
 
 @dp.message(Command("post_myth"))
 async def cmd_post_my(message: types.Message):
-    await message.reply("💡 Gemini 3.7 развенчивает миф...")
+    await message.reply("💡 Gemini 3.7 развенчивает миф, Nano Banana генерирует арт...")
     success, res = await generate_and_publish_post(RUBRIC_MYTHS)
     await message.reply("✅ " + res if success else "❌ " + res)
 
