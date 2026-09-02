@@ -59,7 +59,26 @@ SPAM_LINKS_PATTERN = re.compile(
     re.IGNORECASE
 )
 
-# Русскоязычные каналы (наивысший приоритет в выдаче)
+# 1. Российские научно-популярные и медицинские журналы с открытыми RSS
+RU_JOURNALS_RSS = [
+    {
+        "name": "Биомолекула (журнал молекулярной медицины и биохимии)",
+        "rss": "https://biomolecula.ru/rss",
+        "category": "🔬 НАУЧНЫЙ ДАЙДЖЕСТ: БИОХИМИЯ И СОСУДЫ"
+    },
+    {
+        "name": "Спортивная медицина и наука (sportmedicine.ru)",
+        "rss": "https://sportmedicine.ru/rss.php",
+        "category": "🏃 СПОРТИВНАЯ МЕДИЦИНА И КАРДИО-ФИЗИОЛОГИЯ"
+    },
+    {
+        "name": "Журнал доказательного фитнеса и питания «Зожник»",
+        "rss": "https://zozhnik.ru/feed",
+        "category": "🥗 ДОКАЗАТЕЛЬНОЕ ПИТАНИЕ И РЕЦЕПТЫ"
+    }
+]
+
+# 2. Российские YouTube каналы
 RU_HEALTH_CHANNELS = [
     {"name": "Российское кардиологическое общество (РКО / scardioru)", "channel_id": "UCjWbK_tC3vD6vf3qZ1jH8tw", "handle": "@scardioru"},
     {"name": "Доктор Утин (кардиохирург Алексей Утин)", "channel_id": "UCe1Qc_VqL_8rLq9a-tM_HwQ", "handle": "@DoctorUtin"},
@@ -67,32 +86,31 @@ RU_HEALTH_CHANNELS = [
     {"name": "СМТ — Научный подход (Борис Цацулин)", "channel_id": "UCi1p7P6-O3sV3h98rW2g6mA", "handle": "@CavemanTech"}
 ]
 
-# Зарубежные каналы мировых экспертов
+# 3. Зарубежные эксперты YouTube
 GLOBAL_HEALTH_CHANNELS = [
-    {"name": "Dr. Peter Attia (эксперт по долголетию и липидологии)", "channel_id": "UCF_fDSgblvyC-hltP1t4gTg", "handle": "@PeterAttiaMD"},
+    {"name": "Dr. Peter Attia (липидология и долголетие)", "channel_id": "UCF_fDSgblvyC-hltP1t4gTg", "handle": "@PeterAttiaMD"},
     {"name": "Dr. Gil Carvalho (Nutrition Made Simple)", "channel_id": "UCosmc75v-4N3A7OHr8G25Ew", "handle": "@NutritionMadeSimple"},
     {"name": "Dr. Rhonda Patrick (FoundMyFitness)", "channel_id": "UCWF9aXYms1JpTf_bkW_X27g", "handle": "@FoundMyFitness"},
-    {"name": "Dr. Brad Stanfield (превентивная кардиология)", "channel_id": "UCpcvPevmCfu_UhyvCc_1K8A", "handle": "@DrBradStanfield"},
+    {"name": "Dr. Brad Stanfield (превентивная медицина)", "channel_id": "UCpcvPevmCfu_UhyvCc_1K8A", "handle": "@DrBradStanfield"},
     {"name": "Simon Hill / The Proof", "channel_id": "UCE0f85hX8Qz2e0n_W1i5qKw", "handle": "@TheProofWithSimonHill"},
     {"name": "Huberman Lab (Стэнфорд)", "channel_id": "UC2D2CMWXMOVWx7giW1n3LIg", "handle": "@hubermanlab"}
 ]
 
-# Строгий кардиологический фильтр для ВСЕХ каналов
 HEALTH_KEYWORDS = [
     "холестерин", "сосуд", "сердц", "лпнп", "давлен", "гипертон", "питан", "диета", "статины",
     "жир", "ходьба", "спорт", "атеросклероз", "бляшк", "долголетие", "кардио", "триглицерид",
-    "рКО", "инфаркт", "инсульт", "апоб", "apob", "липидограм", "анализ", "чекап",
+    "рко", "инфаркт", "инсульт", "апоб", "apob", "липидограм", "анализ", "чекап", "клетчатк",
+    "омега-3", "омега 3", "липид", "пульс", "аэробн", "выносливост", "рецепт", "блюд",
     "cholesterol", "ldl", "hdl", "apob", "artery", "atherosclerosis", "heart", "cardio",
     "blood pressure", "hypertension", "diet", "fasting", "exercise", "longevity", "lipids",
-    "statins", "triglycerides", "omega-3", "nutrition", "vessel", "plaque", "glucose", "metabolism"
+    "statins", "triglycerides", "omega-3", "nutrition", "vessel", "plaque", "glucose", "metabolism", "recipe"
 ]
 
 RUBRIC_RECIPES = {
     "category": "🥗 ГИПОЛИПИДЕМИЧЕСКАЯ КУХНЯ",
-    "source_type": "pubmed",
+    "source_type": "recipe_source",
     "style_type": "recipe_card",
-    "query": '("dietary fiber" OR "beta-glucan" OR "legumes" OR "flaxseed" OR "olive oil") AND ("LDL cholesterol" OR "lipids") AND ("trial" OR "randomized")',
-    "ru_theme": "Кулинарный рецепт для снижения ЛПНП (насыщенные жиры менее 1.5г, клетчатка более 6г)",
+    "ru_theme": "Реальное кулинарное блюдо из медицинских и диетологических исследований для снижения ЛПНП",
     "hashtags": "#Рецепт_ЛПНП #УмнаяЗамена #ПитаниеСердца #Клетчатка"
 }
 
@@ -100,7 +118,7 @@ RUBRIC_YOUTUBE = {
     "category": "📺 МИРОВОЙ И РОССИЙСКИЙ НАУЧПОП / ВЫЖИМКА",
     "source_type": "youtube",
     "style_type": "story_or_interview",
-    "ru_theme": "Увлекательная выжимка из видео экспертов (РКО, Утин, Attia, Huberman) о холестерине и сосудах",
+    "ru_theme": "Увлекательная выжимка из видео экспертов о холестерине, сосудах и здоровье",
     "hashtags": "#Липидограм_Видео #Научпоп #РКО #Долголетие #ЗдоровьеСосудов"
 }
 
@@ -109,7 +127,7 @@ RUBRIC_MYTHS = {
     "source_type": "pubmed",
     "style_type": "myth_buster",
     "query": '("dietary cholesterol" OR "eggs" OR "statins" OR "omega-3 fatty acids" OR "coffee") AND ("atherosclerosis" OR "cardiovascular") AND ("meta-analysis" OR "systematic review")',
-    "ru_theme": "Разбор популярного мифа: яйца, кофе, статины, чистки сосудов доказательной медициной",
+    "ru_theme": "Разбор популярного мифа доказательной медициной",
     "hashtags": "#Мифы_Липидограм #Доказательно #Холестерин"
 }
 
@@ -117,9 +135,9 @@ RUBRIC_SPORT = {
     "category": "🏃 АКТИВНОСТЬ И ЭЛАСТИЧНОСТЬ СОСУДОВ",
     "source_type": "pubmed",
     "style_type": "practical_guide",
-    "query": '("aerobic exercise" OR "resistance training" OR "walking") AND ("flow-mediated dilation" OR "endothelial" OR "HDL-C" OR "lipid profile") AND ("trial" OR "randomized")',
-    "ru_theme": "Советы по движению для сосудов и сердца",
-    "hashtags": "#Движение_Липидограм #ЗдоровьеСердца #Прогулки #ЭластичностьСосудов"
+    "query": '("aerobic exercise" OR "resistance training" OR "walking" OR "interval training") AND ("flow-mediated dilation" OR "endothelial" OR "HDL-C" OR "lipid profile") AND ("trial" OR "randomized")',
+    "ru_theme": "Разнообразные формы движения для сосудов и сердца",
+    "hashtags": "#Движение_Липидограм #ЗдоровьеСердца #Активность #ЭластичностьСосудов"
 }
 
 RUBRIC_ACADEMIC_SCIENCE = {
@@ -127,22 +145,35 @@ RUBRIC_ACADEMIC_SCIENCE = {
     "source_type": "rko",
     "style_type": "expert_review",
     "query": "липиды холестерин",
-    "ru_theme": "Клинические новости Российского кардиологического общества (РКО) и новейшие мета-анализы",
+    "ru_theme": "Клинические новости Российского кардиологического общества (РКО) и мета-анализы",
     "hashtags": "#Липидограм_Наука #РКО #Кардиология #ЛПНП"
+}
+
+RUBRIC_RU_JOURNALS = {
+    "category": "🇷🇺 РОССИЙСКАЯ ДОКАЗАТЕЛЬНАЯ МЕДИЦИНА",
+    "source_type": "ru_journals",
+    "style_type": "expert_review",
+    "ru_theme": "Статьи из ведущих российских научных изданий (Биомолекула, Sportmedicine, Зожник)",
+    "hashtags": "#Липидограм_Наука #Доказательно #Биохимия #Кардиология"
 }
 
 SYSTEM_PROMPT = """
 Ты — главный редактор русскоязычного Telegram-канала «Липидограм» (@lipidogram).
 Твоя задача — написать яркий, легкий и увлекательный пост простым человеческим языком НА ОСНОВЕ ПРЕДОСТАВЛЕННОГО ПЕРВОИСТОЧНИКА.
 
-ПРАВИЛА:
-- Фокусируйся строго на теме здоровья сердца, сосудов, холестерина, питания и долголетия.
-- Опирайся на факты и ключевые мысли из текста первоисточника.
-- Не используй штампы («боул», «суперфуд»).
-- Объем текста: 550-800 символов.
-- Разрешенные теги: <b>, </b>, <i>, </i>, <code>, </code>, <a href="...">.
-- Знаки < и > пиши словами («менее», «более») или экранируй (&lt; и &gt;).
-- В самом конце обязательно укажи первоисточник (название видео со ссылкой) и хештеги.
+СТРОГИЕ ЗАПРЕТЫ И ПРАВИЛА:
+1. КАТЕГОРИЧЕСКИЙ ЗАПРЕТ НА ШТАМП «8000 шагов» и «прогулка быстрым шагом в разговорном темпе». Не повторяй эту фразу! Используй разнообразные синонимы и формы активности:
+   - «бодрая 20-минутная прогулка после еды»
+   - «лёгкая утренняя зарядка для сосудистого тонуса»
+   - «комфортный бег трусцой или велосипед без одышки»
+   - «подъём по лестнице вместо лифта»
+   - «ежедневный объем движения»
+   - «интервальная разминка на свежем воздухе»
+2. ЕСЛИ ЭТО РЕЦЕПТ: опирайся СТРОГО на предоставленный список ингредиентов из первоисточника. Опиши простое пошаговое приготовление и объясни пользу для снижения ЛПНП (клетчатка, замена насыщенных жиров на оливковое/льняное масло или авокадо).
+3. Объем текста: 550-800 символов.
+4. Разрешенные теги: <b>, </b>, <i>, </i>, <code>, </code>, <a href="...">.
+5. Знаки < и > пиши словами («менее», «более») или экранируй (&lt; и &gt;).
+6. В самом конце обязательно укажи первоисточник со ссылкой и хештеги.
 
 ТРЕБОВАНИЯ К IMAGE PROMPT ("image_prompt"):
 - На АНГЛИЙСКОМ языке.
@@ -332,8 +363,112 @@ async def generate_kie_image_bytes(image_prompt: str) -> bytes:
 
     return None
 
+# ПОИСК РЕАЛЬНЫХ ДОКАЗАТЕЛЬНЫХ РЕЦЕПТОВ ИЗ ИСТОЧНИКОВ (AHA / PubMed / Зожник)
+def fetch_real_cardio_recipe() -> dict:
+    try:
+        headers = {"User-Agent": "Mozilla/5.0"}
+        # 1. Пробуем найти свежий рецепт в доказательном журнале Зожник
+        z_resp = requests.get("https://zozhnik.ru/category/eda/recepty/feed", headers=headers, timeout=8)
+        if z_resp.status_code == 200:
+            root = ET.fromstring(z_resp.content)
+            items = root.findall(".//item")
+            if items:
+                random.shuffle(items)
+                for it in items[:6]:
+                    title_elem = it.find("title")
+                    link_elem = it.find("link")
+                    desc_elem = it.find("description")
+                    if title_elem is not None and link_elem is not None:
+                        t = title_elem.text or ""
+                        l = link_elem.text or ""
+                        d = desc_elem.text if desc_elem is not None else ""
+                        clean_d = BeautifulSoup(d, "html.parser").get_text(separator=" ", strip=True)
+                        if any(kw in f"{t} {clean_d}".lower() for kw in ["рыб", "овсян", "чечевиц", "нут", "фасол", "авокадо", "салат", "оливк", "семен", "овощ", "клетчатк"]):
+                            return {
+                                "title": t,
+                                "journal": "Журнал доказательного питания «Зожник»",
+                                "content": f"Рецепт: {t}\nОписание и ингредиенты:\n{clean_d[:2500]}",
+                                "url": l
+                            }
+    except Exception as e:
+        logging.warning(f"Ошибка парсинга рецептов Зожника: {e}")
+
+    # 2. Поиск клинических диетологических исследований на PubMed
+    query = '("Mediterranean diet" OR "Portfolio diet" OR "Oat beta-glucan" OR "Legumes" OR "Walnuts" OR "Flaxseed") AND ("LDL cholesterol" OR "lipid lowering") AND ("recipe" OR "dietary intervention" OR "trial")'
+    study = fetch_pubmed_study_with_abstract(query)
+    if study:
+        return {
+            "title": f"Кардиопротективный рацион: {study['title']}",
+            "journal": f"PubMed / {study['journal']}",
+            "content": f"Исследование: {study['title']}\nДанные по продуктам и нутриентам:\n{study['abstract']}",
+            "url": study['url']
+        }
+
+    return {
+        "title": "Средиземноморский салат с чечевицей, авокадо и льняной заправкой",
+        "journal": "Клинические рекомендации по гиполипидемической диете (ESC / AHA Guidelines)",
+        "content": "Ингредиенты: отварная зеленая чечевица (богата растворимой клетчаткой), спелый авокадо (мононенасыщенные жиры), свежий шпинат, оливковое масло первого отжима Extra Virgin, семена льна. Содержание насыщенных жиров менее 1.5г.",
+        "url": "https://scardio.ru/news/novosti_obschestva/"
+    }
+
+def fetch_russian_journals_rss() -> dict:
+    journals = list(RU_JOURNALS_RSS)
+    random.shuffle(journals)
+
+    for j in journals:
+        try:
+            headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+            resp = requests.get(j["rss"], headers=headers, timeout=10)
+            if resp.status_code == 200:
+                root = ET.fromstring(resp.content)
+                items = root.findall(".//item")
+                if not items:
+                    items = root.findall(".//{http://www.w3.org/2005/Atom}entry")
+
+                random.shuffle(items)
+
+                for item in items:
+                    title_elem = item.find("title") or item.find("{http://www.w3.org/2005/Atom}title")
+                    link_elem = item.find("link") or item.find("{http://www.w3.org/2005/Atom}link")
+                    desc_elem = item.find("description") or item.find("{http://www.w3.org/2005/Atom}summary")
+
+                    if title_elem is None or link_elem is None:
+                        continue
+
+                    title = title_elem.text or ""
+                    link = link_elem.text if link_elem.text else link_elem.attrib.get("href", "")
+                    raw_desc = desc_elem.text if desc_elem is not None and desc_elem.text else ""
+
+                    clean_desc = BeautifulSoup(raw_desc, "html.parser").get_text(separator=" ", strip=True)
+                    combined = f"{title} {clean_desc}".lower()
+
+                    if any(kw in combined for kw in HEALTH_KEYWORDS):
+                        article_text = clean_desc
+                        try:
+                            art_resp = requests.get(link, headers=headers, timeout=6)
+                            if art_resp.status_code == 200:
+                                art_soup = BeautifulSoup(art_resp.content, "html.parser")
+                                paras = [p.get_text(strip=True) for p in art_soup.find_all("p") if len(p.get_text(strip=True)) > 40]
+                                if paras:
+                                    article_text = "\n".join(paras[:5])
+                        except Exception:
+                            pass
+
+                        return {
+                            "title": title,
+                            "journal": j["name"],
+                            "category": j["category"],
+                            "content": f"Заголовок: {title}\nИздание: {j['name']}\n\nТекст статьи:\n{article_text[:2800]}",
+                            "url": link,
+                            "hashtags": "#Липидограм_Наука #Доказательно #Кардиология #ПитаниеСердца"
+                        }
+        except Exception as e:
+            logging.warning(f"Ошибка парсинга журнала {j['name']}: {e}")
+            continue
+
+    return fetch_rko_news()
+
 def fetch_global_youtube_video() -> dict:
-    # 75% приоритет русскоязычных каналов (РКО, Утин, Тамаз, Цацулин)
     if random.random() < 0.75:
         primary_pool = list(RU_HEALTH_CHANNELS)
         secondary_pool = list(GLOBAL_HEALTH_CHANNELS)
@@ -350,7 +485,6 @@ def fetch_global_youtube_video() -> dict:
             channel_id = channel.get("channel_id")
             handle = channel.get("handle", "")
             
-            # Пробуем через channel_id RSS, либо через handle/user
             rss_url = f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"
             headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
             req = requests.get(rss_url, headers=headers, timeout=10)
@@ -385,8 +519,6 @@ def fetch_global_youtube_video() -> dict:
                     desc_elem = entry.find(".//media:description", ns)
                     description = desc_elem.text if desc_elem is not None else ""
 
-                    # Если это канал РКО (scardioru) — берем любое видео, так как они 100% профильные
-                    # Для остальных каналов проверяем строгий кардиологический фильтр
                     is_rko = "scardio" in channel.get("name", "").lower() or "scardioru" in handle.lower()
                     combined_text = f"{title} {description}".lower()
                     
@@ -602,11 +734,32 @@ def sanitize_html_for_telegram(text: str) -> str:
         text = text.replace(key, val)
     return text
 
+# ДИНАМИЧЕСКОЕ РАСПИСАНИЕ, МЕНЯЮЩЕЕСЯ КАЖДУЮ НОВУЮ НЕДЕЛЮ ГОДА
 def pick_rubric_by_schedule() -> dict:
-    rubrics = [RUBRIC_YOUTUBE, RUBRIC_RECIPES, RUBRIC_MYTHS, RUBRIC_SPORT, RUBRIC_ACADEMIC_SCIENCE]
-    return random.choice(rubrics)
+    now = datetime.now()
+    week_number = now.isocalendar().week
+    weekday = now.weekday()  # 0: Пн, 6: Вс
+    hour = now.hour
 
-async def generate_and_publish_post(custom_rubric: dict = None, with_image: bool = True) -> tuple[bool, str]:
+    # Чередуем две разные матрицы расписания для четных и нечетных недель
+    if week_number % 2 == 1:
+        # Нечетная неделя
+        if hour < 14:
+            morning_plan = [RUBRIC_ACADEMIC_SCIENCE, RUBRIC_YOUTUBE, RUBRIC_RU_JOURNALS, RUBRIC_YOUTUBE, RUBRIC_ACADEMIC_SCIENCE, RUBRIC_SPORT, RUBRIC_YOUTUBE]
+            return morning_plan[weekday % len(morning_plan)]
+        else:
+            evening_plan = [RUBRIC_RECIPES, RUBRIC_MYTHS, RUBRIC_SPORT, RUBRIC_MYTHS, RUBRIC_RECIPES, RUBRIC_MYTHS, RUBRIC_RECIPES]
+            return evening_plan[weekday % len(evening_plan)]
+    else:
+        # Четная неделя (другой порядок тем)
+        if hour < 14:
+            morning_plan = [RUBRIC_RU_JOURNALS, RUBRIC_ACADEMIC_SCIENCE, RUBRIC_YOUTUBE, RUBRIC_RU_JOURNALS, RUBRIC_SPORT, RUBRIC_YOUTUBE, RUBRIC_ACADEMIC_SCIENCE]
+            return morning_plan[weekday % len(morning_plan)]
+        else:
+            evening_plan = [RUBRIC_MYTHS, RUBRIC_RECIPES, RUBRIC_MYTHS, RUBRIC_RECIPES, RUBRIC_SPORT, RUBRIC_RECIPES, RUBRIC_MYTHS]
+            return evening_plan[weekday % len(evening_plan)]
+
+async def generate_and_publish_post(custom_rubric: dict = None, with_image: bool = True, source_mode: str = "auto") -> tuple[bool, str]:
     if not KIE_KEY:
         err = "KIE_API_KEY не установлен в переменных Render!"
         logging.error(err)
@@ -619,11 +772,27 @@ async def generate_and_publish_post(custom_rubric: dict = None, with_image: bool
 
     rubric = custom_rubric or pick_rubric_by_schedule()
     style = rubric.get("style_type", "expert_review")
-    logging.info(f"Запуск рубрики: {rubric['category']} (стиль: {style}, фото: {with_image})")
-
     img_bytes = None
 
-    if rubric.get("source_type") == "youtube":
+    if source_mode == "ru_journals" or rubric.get("source_type") == "ru_journals":
+        study = fetch_russian_journals_rss()
+        category = study.get("category", "🔬 РОССИЙСКАЯ ДОКАЗАТЕЛЬНАЯ МЕДИЦИНА")
+        hashtags = study.get("hashtags", rubric['hashtags'])
+        prompt = (
+            f"Напиши пост в стиле «{style}» для Telegram-канала «Липидограм» в рубрику «{category}».\n"
+            f"МАТЕРИАЛ ИЗ РОССИЙСКОГО НАУЧНОГО ИЗДАНИЯ:\n{study.get('content', '')}\n\n"
+            f"В блоке Первоисточник поставь ТОЧНО эту ссылку на статью: <a href='{study['url']}'>{study['title']} ({study['journal']})</a>.\n"
+            f"В самом конце добавь хештеги: {hashtags}"
+        )
+    elif rubric.get("source_type") == "recipe_source":
+        study = fetch_real_cardio_recipe()
+        prompt = (
+            f"Напиши карточку полезного блюда в стиле «{style}» для Telegram-канала «Липидограм» в рубрику «{rubric['category']}».\n"
+            f"РЕАЛЬНЫЙ РЕЦЕПТ ИЗ ИСТОЧНИКА:\n{study.get('content', '')}\n\n"
+            f"В блоке Первоисточник поставь ТОЧНО эту ссылку: <a href='{study['url']}'>{study['title']} / {study['journal']}</a>.\n"
+            f"В самом конце добавь хештеги: {rubric['hashtags']}"
+        )
+    elif rubric.get("source_type") == "youtube":
         study = fetch_global_youtube_video()
         if with_image and study.get("image_url"):
             try:
@@ -710,36 +879,43 @@ async def cmd_start(message: types.Message):
     await message.reply(
         "🫀 <b>Медиа-бот «Липидограм»</b>\n\n"
         "<b>Команды с фото (Gemini 3.7 + Nano Banana 2 Lite):</b>\n"
-        "• /post_now — случайный пост из реальных источников с фото\n"
-        "• /post_youtube — реальная выжимка видео (РКО, Утин, Attia) с фото\n"
-        "• /post_recipe — доказательный рецепт с фото\n"
+        "• /post_now — публикация по динамическому расписанию недели\n"
+        "• /post_recipe — реальный доказательный рецепт с фото\n"
+        "• /post_ru — пост из российских научных журналов\n"
+        "• /post_youtube — видеовыжимка (РКО, Утин, Attia)\n"
         "• /post_myth — разбор мифа с фото\n\n"
         "<b>🧪 Тестовые команды БЕЗ картинки (0 кредитов, мгновенно):</b>\n"
+        "• /test_recipe — проверка реального рецепта\n"
+        "• /test_ru — проверка российских журналов (Биомолекула, Зожник)\n"
+        "• /test_youtube — проверка реального YouTube видео\n"
         "• /test_text — случайный пост (только текст)\n"
-        "• /test_youtube — проверка реального YouTube видео (только текст)\n"
-        "• /test_recipe — проверка рецепта (только текст)\n"
-        "• /test_myth — проверка мифа (только текст)\n"
-        "• /test_science — научный дайджест РКО / PubMed",
+        "• /test_myth — проверка мифа",
         parse_mode="HTML"
     )
 
 # --- Команды с полной генерацией арта ---
 @dp.message(Command("post_now"))
 async def cmd_post_now(message: types.Message):
-    await message.reply("⏳ Gemini 3.7 формирует пост, а Nano Banana 2 Lite создает арт (до 60-90 сек)...")
+    await message.reply("⏳ Gemini 3.7 формирует пост по расписанию недели, Nano Banana создает арт...")
     success, res = await generate_and_publish_post(with_image=True)
+    await message.reply("✅ " + res if success else "❌ " + res)
+
+@dp.message(Command("post_recipe"))
+async def cmd_post_rec(message: types.Message):
+    await message.reply("🥗 Ищу реальный рецепт в источниках и создаю фото блюда...")
+    success, res = await generate_and_publish_post(RUBRIC_RECIPES, with_image=True)
+    await message.reply("✅ " + res if success else "❌ " + res)
+
+@dp.message(Command("post_ru"))
+async def cmd_post_ru(message: types.Message):
+    await message.reply("🇷🇺 Анализирую российские научные журналы и создаю арт...")
+    success, res = await generate_and_publish_post(with_image=True, source_mode="ru_journals")
     await message.reply("✅ " + res if success else "❌ " + res)
 
 @dp.message(Command("post_youtube"))
 async def cmd_post_yt(message: types.Message):
     await message.reply("🎬 Забираю свежее видео через RSS экспертов и создаю пост с превью...")
     success, res = await generate_and_publish_post(RUBRIC_YOUTUBE, with_image=True)
-    await message.reply("✅ " + res if success else "❌ " + res)
-
-@dp.message(Command("post_recipe"))
-async def cmd_post_rec(message: types.Message):
-    await message.reply("🥗 Nano Banana 2 Lite генерирует фото блюда и рецепт (до 60-90 сек)...")
-    success, res = await generate_and_publish_post(RUBRIC_RECIPES, with_image=True)
     await message.reply("✅ " + res if success else "❌ " + res)
 
 @dp.message(Command("post_myth"))
@@ -749,10 +925,16 @@ async def cmd_post_my(message: types.Message):
     await message.reply("✅ " + res if success else "❌ " + res)
 
 # --- Тестовые команды БЕЗ генерации картинки (быстро, 0 кредитов) ---
-@dp.message(Command("test_text"))
-async def cmd_test_text(message: types.Message):
-    await message.reply("⚡ Gemini 3.7 генерирует тестовый пост без картинки...")
-    success, res = await generate_and_publish_post(with_image=False)
+@dp.message(Command("test_recipe"))
+async def cmd_test_rec(message: types.Message):
+    await message.reply("⚡ Ищу реальный рецепт из первоисточников без арта...")
+    success, res = await generate_and_publish_post(RUBRIC_RECIPES, with_image=False)
+    await message.reply("✅ " + res if success else "❌ " + res)
+
+@dp.message(Command("test_ru"))
+async def cmd_test_ru(message: types.Message):
+    await message.reply("⚡ Анализирую российские журналы (Биомолекула, Sportmed, Зожник) без арта...")
+    success, res = await generate_and_publish_post(with_image=False, source_mode="ru_journals")
     await message.reply("✅ " + res if success else "❌ " + res)
 
 @dp.message(Command("test_youtube"))
@@ -761,22 +943,16 @@ async def cmd_test_yt(message: types.Message):
     success, res = await generate_and_publish_post(RUBRIC_YOUTUBE, with_image=False)
     await message.reply("✅ " + res if success else "❌ " + res)
 
-@dp.message(Command("test_recipe"))
-async def cmd_test_rec(message: types.Message):
-    await message.reply("⚡ Генерирую рецепт через Gemini 3.7 (без арта)...")
-    success, res = await generate_and_publish_post(RUBRIC_RECIPES, with_image=False)
+@dp.message(Command("test_text"))
+async def cmd_test_text(message: types.Message):
+    await message.reply("⚡ Gemini 3.7 генерирует тестовый пост по расписанию...")
+    success, res = await generate_and_publish_post(with_image=False)
     await message.reply("✅ " + res if success else "❌ " + res)
 
 @dp.message(Command("test_myth"))
 async def cmd_test_my(message: types.Message):
     await message.reply("⚡ Разбор мифа через Gemini 3.7 (без арта)...")
     success, res = await generate_and_publish_post(RUBRIC_MYTHS, with_image=False)
-    await message.reply("✅ " + res if success else "❌ " + res)
-
-@dp.message(Command("test_science"))
-async def cmd_test_sci(message: types.Message):
-    await message.reply("⚡ Научный дайджест РКО / PubMed через Gemini 3.7 (без арта)...")
-    success, res = await generate_and_publish_post(RUBRIC_ACADEMIC_SCIENCE, with_image=False)
     await message.reply("✅ " + res if success else "❌ " + res)
 
 @dp.message(F.text)
