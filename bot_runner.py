@@ -59,15 +59,32 @@ SPAM_LINKS_PATTERN = re.compile(
     re.IGNORECASE
 )
 
+# Русскоязычные каналы (наивысший приоритет в выдаче)
+RU_HEALTH_CHANNELS = [
+    {"name": "Российское кардиологическое общество (РКО / scardioru)", "channel_id": "UCjWbK_tC3vD6vf3qZ1jH8tw", "handle": "@scardioru"},
+    {"name": "Доктор Утин (кардиохирург Алексей Утин)", "channel_id": "UCe1Qc_VqL_8rLq9a-tM_HwQ", "handle": "@DoctorUtin"},
+    {"name": "Кардиолог Тамаз Гаглошвили", "channel_id": "UCk46gLhW1lM3Jp-vjZ_L5HQ", "handle": "@doctor_tamaz"},
+    {"name": "СМТ — Научный подход (Борис Цацулин)", "channel_id": "UCi1p7P6-O3sV3h98rW2g6mA", "handle": "@CavemanTech"}
+]
+
+# Зарубежные каналы мировых экспертов
 GLOBAL_HEALTH_CHANNELS = [
-    {"name": "Dr. Peter Attia", "channel_id": "UCF_fDSgblvyC-hltP1t4gTg"},
-    {"name": "Huberman Lab", "channel_id": "UC2D2CMWXMOVWx7giW1n3LIg"},
-    {"name": "Dr. Gil Carvalho (Nutrition Made Simple)", "channel_id": "UCosmc75v-4N3A7OHr8G25Ew"},
-    {"name": "Dr. Rhonda Patrick (FoundMyFitness)", "channel_id": "UCWF9aXYms1JpTf_bkW_X27g"},
-    {"name": "Dr. Brad Stanfield", "channel_id": "UCpcvPevmCfu_UhyvCc_1K8A"},
-    {"name": "Simon Hill / The Proof", "channel_id": "UCE0f85hX8Qz2e0n_W1i5qKw"},
-    {"name": "Доктор Утин", "channel_id": "UCe1Qc_VqL_8rLq9a-tM_HwQ"},
-    {"name": "СМТ — Научный подход", "channel_id": "UCi1p7P6-O3sV3h98rW2g6mA"}
+    {"name": "Dr. Peter Attia (эксперт по долголетию и липидологии)", "channel_id": "UCF_fDSgblvyC-hltP1t4gTg", "handle": "@PeterAttiaMD"},
+    {"name": "Dr. Gil Carvalho (Nutrition Made Simple)", "channel_id": "UCosmc75v-4N3A7OHr8G25Ew", "handle": "@NutritionMadeSimple"},
+    {"name": "Dr. Rhonda Patrick (FoundMyFitness)", "channel_id": "UCWF9aXYms1JpTf_bkW_X27g", "handle": "@FoundMyFitness"},
+    {"name": "Dr. Brad Stanfield (превентивная кардиология)", "channel_id": "UCpcvPevmCfu_UhyvCc_1K8A", "handle": "@DrBradStanfield"},
+    {"name": "Simon Hill / The Proof", "channel_id": "UCE0f85hX8Qz2e0n_W1i5qKw", "handle": "@TheProofWithSimonHill"},
+    {"name": "Huberman Lab (Стэнфорд)", "channel_id": "UC2D2CMWXMOVWx7giW1n3LIg", "handle": "@hubermanlab"}
+]
+
+# Строгий кардиологический фильтр для ВСЕХ каналов
+HEALTH_KEYWORDS = [
+    "холестерин", "сосуд", "сердц", "лпнп", "давлен", "гипертон", "питан", "диета", "статины",
+    "жир", "ходьба", "спорт", "атеросклероз", "бляшк", "долголетие", "кардио", "триглицерид",
+    "рКО", "инфаркт", "инсульт", "апоб", "apob", "липидограм", "анализ", "чекап",
+    "cholesterol", "ldl", "hdl", "apob", "artery", "atherosclerosis", "heart", "cardio",
+    "blood pressure", "hypertension", "diet", "fasting", "exercise", "longevity", "lipids",
+    "statins", "triglycerides", "omega-3", "nutrition", "vessel", "plaque", "glucose", "metabolism"
 ]
 
 RUBRIC_RECIPES = {
@@ -80,11 +97,11 @@ RUBRIC_RECIPES = {
 }
 
 RUBRIC_YOUTUBE = {
-    "category": "📺 МИРОВОЙ НАУЧПОП / ВЫЖИМКА",
+    "category": "📺 МИРОВОЙ И РОССИЙСКИЙ НАУЧПОП / ВЫЖИМКА",
     "source_type": "youtube",
     "style_type": "story_or_interview",
-    "ru_theme": "Увлекательная выжимка из популярного видео мировых экспертов (Attia, Huberman, Утин, Rhonda Patrick)",
-    "hashtags": "#Липидограм_Видео #Научпоп #Долголетие #ЗдоровьеСосудов"
+    "ru_theme": "Увлекательная выжимка из видео экспертов (РКО, Утин, Attia, Huberman) о холестерине и сосудах",
+    "hashtags": "#Липидограм_Видео #Научпоп #РКО #Долголетие #ЗдоровьеСосудов"
 }
 
 RUBRIC_MYTHS = {
@@ -101,7 +118,7 @@ RUBRIC_SPORT = {
     "source_type": "pubmed",
     "style_type": "practical_guide",
     "query": '("aerobic exercise" OR "resistance training" OR "walking") AND ("flow-mediated dilation" OR "endothelial" OR "HDL-C" OR "lipid profile") AND ("trial" OR "randomized")',
-    "ru_theme": "Простые советы по движению: быстрая прогулка после еды, 8000 шагов в день, легкий бег в комфортном разговорном темпе без одышки, домашняя зарядка для сосудов",
+    "ru_theme": "Советы по движению для сосудов и сердца",
     "hashtags": "#Движение_Липидограм #ЗдоровьеСердца #Прогулки #ЭластичностьСосудов"
 }
 
@@ -119,6 +136,7 @@ SYSTEM_PROMPT = """
 Твоя задача — написать яркий, легкий и увлекательный пост простым человеческим языком НА ОСНОВЕ ПРЕДОСТАВЛЕННОГО ПЕРВОИСТОЧНИКА.
 
 ПРАВИЛА:
+- Фокусируйся строго на теме здоровья сердца, сосудов, холестерина, питания и долголетия.
 - Опирайся на факты и ключевые мысли из текста первоисточника.
 - Не используй штампы («боул», «суперфуд»).
 - Объем текста: 550-800 символов.
@@ -315,16 +333,33 @@ async def generate_kie_image_bytes(image_prompt: str) -> bytes:
     return None
 
 def fetch_global_youtube_video() -> dict:
-    channels_shuffled = list(GLOBAL_HEALTH_CHANNELS)
-    random.shuffle(channels_shuffled)
+    # 75% приоритет русскоязычных каналов (РКО, Утин, Тамаз, Цацулин)
+    if random.random() < 0.75:
+        primary_pool = list(RU_HEALTH_CHANNELS)
+        secondary_pool = list(GLOBAL_HEALTH_CHANNELS)
+    else:
+        primary_pool = list(GLOBAL_HEALTH_CHANNELS)
+        secondary_pool = list(RU_HEALTH_CHANNELS)
 
-    for channel in channels_shuffled:
+    random.shuffle(primary_pool)
+    random.shuffle(secondary_pool)
+    all_channels = primary_pool + secondary_pool
+
+    for channel in all_channels:
         try:
             channel_id = channel.get("channel_id")
+            handle = channel.get("handle", "")
+            
+            # Пробуем через channel_id RSS, либо через handle/user
             rss_url = f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"
             headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
             req = requests.get(rss_url, headers=headers, timeout=10)
             
+            if req.status_code != 200 and handle:
+                clean_h = handle.replace("@", "")
+                rss_url = f"https://www.youtube.com/feeds/videos.xml?user={clean_h}"
+                req = requests.get(rss_url, headers=headers, timeout=10)
+
             if req.status_code == 200:
                 root = ET.fromstring(req.content)
                 ns = {
@@ -337,9 +372,7 @@ def fetch_global_youtube_video() -> dict:
                 if not entries:
                     continue
 
-                random.shuffle(entries)
-
-                for entry in entries[:6]:
+                for entry in entries:
                     vid_elem = entry.find("yt:videoId", ns)
                     title_elem = entry.find("atom:title", ns)
                     
@@ -352,16 +385,24 @@ def fetch_global_youtube_video() -> dict:
                     desc_elem = entry.find(".//media:description", ns)
                     description = desc_elem.text if desc_elem is not None else ""
 
+                    # Если это канал РКО (scardioru) — берем любое видео, так как они 100% профильные
+                    # Для остальных каналов проверяем строгий кардиологический фильтр
+                    is_rko = "scardio" in channel.get("name", "").lower() or "scardioru" in handle.lower()
+                    combined_text = f"{title} {description}".lower()
+                    
+                    if not is_rko and not any(kw in combined_text for kw in HEALTH_KEYWORDS):
+                        continue
+
                     transcript_text = ""
                     try:
-                        transcript_list = YouTubeTranscriptApi.get_transcript(vid, languages=['en', 'en-US', 'ru'])
-                        transcript_text = " ".join([t['text'] for t in transcript_list[:120]])
+                        transcript_list = YouTubeTranscriptApi.get_transcript(vid, languages=['ru', 'en', 'en-US'])
+                        transcript_text = " ".join([t['text'] for t in transcript_list[:140]])
                     except Exception:
                         transcript_text = description
 
                     content_for_prompt = f"Название видео: {title}\nКанал: {channel['name']}\n\nТекст / Описание видео:\n{transcript_text[:3000]}"
                     
-                    if len(transcript_text) > 100:
+                    if len(transcript_text) > 40:
                         yt_img = f"https://img.youtube.com/vi/{vid}/hqdefault.jpg"
                         video_direct_url = f"https://www.youtube.com/watch?v={vid}"
                         
@@ -670,7 +711,7 @@ async def cmd_start(message: types.Message):
         "🫀 <b>Медиа-бот «Липидограм»</b>\n\n"
         "<b>Команды с фото (Gemini 3.7 + Nano Banana 2 Lite):</b>\n"
         "• /post_now — случайный пост из реальных источников с фото\n"
-        "• /post_youtube — реальная выжимка свежего видео эксперта с фото\n"
+        "• /post_youtube — реальная выжимка видео (РКО, Утин, Attia) с фото\n"
         "• /post_recipe — доказательный рецепт с фото\n"
         "• /post_myth — разбор мифа с фото\n\n"
         "<b>🧪 Тестовые команды БЕЗ картинки (0 кредитов, мгновенно):</b>\n"
