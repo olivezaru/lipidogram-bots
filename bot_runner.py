@@ -96,22 +96,27 @@ def mark_as_published(item_id_or_url: str):
     published_history.add(clean)
     save_history(published_history)
 
-# 1. Российские научно-популярные и медицинские журналы с открытыми RSS
+# 1. Российские научно-популярные и медицинские журналы и ленты
 RU_JOURNALS_RSS = [
-    {
-        "name": "Биомолекула (журнал молекулярной медицины и биохимии)",
-        "rss": "https://biomolecula.ru/rss",
-        "category": "🔬 НАУЧНЫЙ ДАЙДЖЕСТ: БИОХИМИЯ И СОСУДЫ"
-    },
-    {
-        "name": "Спортивная медицина и наука (sportmedicine.ru)",
-        "rss": "https://sportmedicine.ru/rss.php",
-        "category": "🏃 СПОРТИВНАЯ МЕДИЦИНА И КАРДИО-ФИЗИОЛОГИЯ"
-    },
     {
         "name": "Журнал доказательного фитнеса и питания «Зожник»",
         "rss": "https://zozhnik.ru/feed",
-        "category": "🥗 ДОКАЗАТЕЛЬНОЕ ПИТАНИЕ И РЕЦЕПТЫ"
+        "category": "🥗 ДОКАЗАТЕЛЬНОЕ ПИТАНИЕ И ЗДОРОВЬЕ"
+    },
+    {
+        "name": "Хабр Научпоп (Медицина, здоровье и биохимия)",
+        "rss": "https://habr.com/ru/rss/hub/health/all/?fl=ru",
+        "category": "🔬 НАУЧНЫЙ ДАЙДЖЕСТ: МЕДИЦИНА И ЗДОРОВЬЕ"
+    },
+    {
+        "name": "Хабр Биотехнологии и генетика",
+        "rss": "https://habr.com/ru/rss/hub/biotech/all/?fl=ru",
+        "category": "🧬 БИОТЕХНОЛОГИИ И МОЛЕКУЛЯРНАЯ МЕДИЦИНА"
+    },
+    {
+        "name": "N+1 (Наука, физиология и медицина)",
+        "rss": "https://nplus1.ru/rss",
+        "category": "🔬 ДОКАЗАТЕЛЬНАЯ МЕДИЦИНА И НАУКА"
     }
 ]
 
@@ -190,7 +195,7 @@ RUBRIC_RU_JOURNALS = {
     "category": "🇷🇺 РОССИЙСКАЯ ДОКАЗАТЕЛЬНАЯ МЕДИЦИНА",
     "source_type": "ru_journals",
     "style_type": "expert_review",
-    "ru_theme": "Статьи из ведущих российских научных изданий (Биомолекула, Sportmedicine, Зожник)",
+    "ru_theme": "Статьи из ведущих российских научных изданий (Биомолекула, Хабр Наука, Зожник, N+1)",
     "hashtags": "#Липидограм_Наука #Доказательно #Биохимия #Кардиология"
 }
 
@@ -452,8 +457,48 @@ def fetch_real_cardio_recipe() -> dict:
         "url": fallback_url
     }
 
+def fetch_biomolecula_article() -> dict:
+    try:
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+        req = requests.get("https://biomolecula.ru/articles", headers=headers, timeout=8)
+        if req.status_code == 200:
+            slugs = re.findall(r'href=[\"\'](/articles/[a-z0-9\-]+)[\"\']', req.text)
+            valid = list(set([s for s in slugs if s not in ['/articles/top', '/articles/archive']]))
+            if valid:
+                random.shuffle(valid)
+                for slug in valid:
+                    url = f"https://biomolecula.ru{slug}"
+                    if is_already_published(url):
+                        continue
+                    
+                    art_req = requests.get(url, headers=headers, timeout=8)
+                    if art_req.status_code == 200:
+                        soup = BeautifulSoup(art_req.content, "html.parser")
+                        h1 = soup.find("h1")
+                        title = h1.get_text(strip=True) if h1 else "Научная статья"
+                        paras = [p.get_text(strip=True) for p in soup.find_all("p") if len(p.get_text(strip=True)) > 40]
+                        content = "\n".join(paras[:5])
+                        if len(content) > 100:
+                            return {
+                                "id": url,
+                                "title": title,
+                                "journal": "Журнал «Биомолекула» (молекулярная медицина и биохимия)",
+                                "category": "🔬 НАУЧНЫЙ ДАЙДЖЕСТ: БИОХИМИЯ И СОСУДЫ",
+                                "content": f"Заголовок: {title}\nИздание: Журнал «Биомолекула»\n\nТекст статьи:\n{content[:2800]}",
+                                "url": url,
+                                "hashtags": "#Липидограм_Наука #Биомолекула #Биохимия #Кардиология"
+                            }
+    except Exception as e:
+        logging.warning(f"Ошибка парсинга Биомолекулы: {e}")
+    return None
+
 # ПАРСИНГ РОССИЙСКИХ НАУЧНЫХ ЖУРНАЛОВ (С ФИЛЬТРОМ ИСТОРИИ)
 def fetch_russian_journals_rss() -> dict:
+    if random.random() < 0.4:
+        bio = fetch_biomolecula_article()
+        if bio:
+            return bio
+
     journals = list(RU_JOURNALS_RSS)
     random.shuffle(journals)
 
@@ -485,32 +530,34 @@ def fetch_russian_journals_rss() -> dict:
 
                     raw_desc = desc_elem.text if desc_elem is not None and desc_elem.text else ""
                     clean_desc = BeautifulSoup(raw_desc, "html.parser").get_text(separator=" ", strip=True)
-                    combined = f"{title} {clean_desc}".lower()
 
-                    if any(kw in combined for kw in HEALTH_KEYWORDS):
-                        article_text = clean_desc
-                        try:
-                            art_resp = requests.get(link, headers=headers, timeout=6)
-                            if art_resp.status_code == 200:
-                                art_soup = BeautifulSoup(art_resp.content, "html.parser")
-                                paras = [p.get_text(strip=True) for p in art_soup.find_all("p") if len(p.get_text(strip=True)) > 40]
-                                if paras:
-                                    article_text = "\n".join(paras[:5])
-                        except Exception:
-                            pass
+                    article_text = clean_desc
+                    try:
+                        art_resp = requests.get(link, headers=headers, timeout=6)
+                        if art_resp.status_code == 200:
+                            art_soup = BeautifulSoup(art_resp.content, "html.parser")
+                            paras = [p.get_text(strip=True) for p in art_soup.find_all("p") if len(p.get_text(strip=True)) > 40]
+                            if paras:
+                                article_text = "\n".join(paras[:5])
+                    except Exception:
+                        pass
 
-                        return {
-                            "id": link,
-                            "title": title,
-                            "journal": j["name"],
-                            "category": j["category"],
-                            "content": f"Заголовок: {title}\nИздание: {j['name']}\n\nТекст статьи:\n{article_text[:2800]}",
-                            "url": link,
-                            "hashtags": "#Липидограм_Наука #Доказательно #Кардиология #ПитаниеСердца"
-                        }
+                    return {
+                        "id": link,
+                        "title": title,
+                        "journal": j["name"],
+                        "category": j["category"],
+                        "content": f"Заголовок: {title}\nИздание: {j['name']}\n\nТекст статьи:\n{article_text[:2800]}",
+                        "url": link,
+                        "hashtags": "#Липидограм_Наука #Доказательно #Кардиология #ПитаниеСердца"
+                    }
         except Exception as e:
             logging.warning(f"Ошибка парсинга журнала {j['name']}: {e}")
             continue
+
+    bio = fetch_biomolecula_article()
+    if bio:
+        return bio
 
     return fetch_rko_news()
 
@@ -1017,7 +1064,7 @@ async def cmd_test_rec(message: types.Message):
 
 @dp.message(Command("test_ru"))
 async def cmd_test_ru(message: types.Message):
-    await message.reply("⚡ Анализирую российские журналы (Биомолекула, Sportmed, Зожник) без арта...")
+    await message.reply("⚡ Анализирую российские журналы (Биомолекула, Habr, Зожник, N+1)...")
     success, res = await generate_and_publish_post(with_image=False, source_mode="ru_journals")
     await message.reply("✅ " + res if success else "❌ " + res)
 
