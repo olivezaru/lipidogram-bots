@@ -21,6 +21,7 @@ from aiogram import Bot, Dispatcher, types, F
 from aiogram.types import BufferedInputFile
 from aiogram.enums import ChatMemberStatus
 from aiogram.filters import Command
+from aiogram.exceptions import TelegramRetryAfter
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 load_dotenv()
@@ -58,78 +59,68 @@ SPAM_LINKS_PATTERN = re.compile(
     re.IGNORECASE
 )
 
-GLOBAL_HEALTH_CHANNELS = [
-    {"name": "Dr. Peter Attia (США, эксперт по долголетию и липидологии)", "handle": "@PeterAttiaMD"},
-    {"name": "Huberman Lab (Стэнфорд, США)", "handle": "@hubermanlab"},
-    {"name": "Dr. Gil Carvalho (Nutrition Made Simple, США)", "handle": "@NutritionMadeSimple"},
-    {"name": "Dr. Rhonda Patrick (FoundMyFitness, США)", "handle": "@FoundMyFitness"},
-    {"name": "Dr. Brad Stanfield (Новая Зеландия / США)", "handle": "@DrBradStanfield"},
-    {"name": "Simon Hill / The Proof (Великобритания / Австралия)", "handle": "@TheProofWithSimonHill"},
-    {"name": "Доктор Утин (кардиохирург Алексей Утин)", "handle": "@DoctorUtin"},
-    {"name": "Кардиолог Тамаз Гаглошвили", "handle": "@doctor_tamaz"},
-    {"name": "СМТ — Научный подход (Борис Цацулин)", "handle": "@CavemanTech"}
+# Официальные YouTube каналы с прямыми Channel ID для RSS ленты (без блокировок со стороны YouTube)
+YOUTUBE_CHANNELS_RSS = [
+    {"name": "Dr. Peter Attia", "channel_id": "UCF_fDSgblvyC-hltP1t4gTg", "expert": "Питер Аттия (эксперт по липидологии и превентивной кардиологии)"},
+    {"name": "Huberman Lab", "channel_id": "UC2D2CMWXMOVWx7giW1n3LIg", "expert": "Эндрю Хуберман (нейробиолог Стэнфордского университета)"},
+    {"name": "Dr. Gil Carvalho / Nutrition Made Simple", "channel_id": "UCosmc75v-4N3A7OHr8G25Ew", "expert": "Гил Карвальо (исследователь доказательной диетологии)"},
+    {"name": "Dr. Rhonda Patrick / FoundMyFitness", "channel_id": "UCWF9aXYms1JpTf_bkW_X27g", "expert": "Ронда Патрик (биомедицинский исследователь)"},
+    {"name": "Dr. Brad Stanfield", "channel_id": "UCpcvPevmCfu_UhyvCc_1K8A", "expert": "Брэд Стэнфилд (врач превентивной медицины)"},
+    {"name": "Simon Hill / The Proof", "channel_id": "UCE0f85hX8Qz2e0n_W1i5qKw", "expert": "Саймон Хилл (физиолог и автор доказательных обзоров)"},
+    {"name": "Доктор Утин", "channel_id": "UCe1Qc_VqL_8rLq9a-tM_HwQ", "expert": "Алексей Утин (кардиохирург)"},
+    {"name": "СМТ — Научный подход", "channel_id": "UCi1p7P6-O3sV3h98rW2g6mA", "expert": "Борис Цацулин (научно-популярный аналитик)"}
 ]
 
-RUBRIC_RECIPES = {
-    "category": "🥗 ГИПОЛИПИДЕМИЧЕСКАЯ КУХНЯ",
-    "source_type": "pubmed",
-    "style_type": "recipe_card",
-    "query": '("dietary fiber" OR "beta-glucan" OR "legumes" OR "flaxseed" OR "olive oil") AND ("LDL cholesterol" OR "lipids") AND ("trial" OR "randomized")',
-    "ru_theme": "Кулинарный рецепт для снижения ЛПНП (насыщенные жиры менее 1.5г, клетчатка более 6г)",
-    "hashtags": "#Рецепт_ЛПНП #УмнаяЗамена #ПитаниеСердца #Клетчатка"
-}
+# Темы поиска реальных исследований на PubMed и Europe PMC
+PUBMED_SEARCH_TOPICS = [
+    {
+        "query": '("LDL-C" OR "ApoB" OR "triglycerides") AND ("dietary intervention" OR "Mediterranean diet" OR "fiber") AND ("clinical trial" OR "meta-analysis")',
+        "category": "🥗 КЛИНИЧЕСКАЯ ДИЕТОЛОГИЯ И ЛИПИДЫ",
+        "hashtags": "#Липидограм_Питание #ЛПНП #Доказательно #Диета"
+    },
+    {
+        "query": '("statins" OR "ezetimibe" OR "PCSK9" OR "bempedoic acid") AND ("cardiovascular risk" OR "atherosclerosis") AND ("randomized controlled trial" OR "meta-analysis")',
+        "category": "💊 ФАРМАКОТЕРАПИЯ И АТЕРОСКЛЕРОЗ",
+        "hashtags": "#Липидограм_Фарма #Статины #Атеросклероз #Кардиология"
+    },
+    {
+        "query": '("exercise" OR "resistance training" OR "aerobic capacity" OR "step count") AND ("arterial stiffness" OR "endothelial function" OR "HDL") AND ("trial" OR "meta-analysis")',
+        "category": "🏃 АКТИВНОСТЬ И ЭЛАСТИЧНОСТЬ СОСУДОВ",
+        "hashtags": "#Липидограм_Движение #ЭластичностьСосудов #Сердце #Спорт"
+    },
+    {
+        "query": '("coronary artery calcium" OR "lipoprotein(a)" OR "plaque regression" OR "imaging") AND ("atherosclerosis" OR "infarction") AND ("prospective" OR "trial")',
+        "category": "🔬 ДИАГНОСТИКА И ФАКТОРЫ РИСКА",
+        "hashtags": "#Липидограм_Диагностика #Лп_а #КальцийСосудов #Чекап"
+    },
+    {
+        "query": '("dietary cholesterol" OR "eggs" OR "omega-3" OR "saturated fatty acids" OR "coffee") AND ("cardiovascular" OR "mortality") AND ("meta-analysis" OR "systematic review")',
+        "category": "💡 РАЗБОР МИФОВ И ИССЛЕДОВАНИЙ",
+        "hashtags": "#Липидограм_Мифы #НаучныйПодход #Холестерин"
+    }
+]
 
-RUBRIC_YOUTUBE = {
-    "category": "📺 МИРОВОЙ НАУЧПОП / ВЫЖИМКА",
-    "source_type": "youtube",
-    "style_type": "story_or_interview",
-    "ru_theme": "Увлекательная выжимка из популярного видео мировых экспертов (Attia, Huberman, Утин, Rhonda Patrick)",
-    "hashtags": "#Липидограм_Видео #Научпоп #Долголетие #ЗдоровьеСосудов"
-}
-
-RUBRIC_MYTHS = {
-    "category": "💡 МИФ ИЛИ РЕАЛЬНОСТЬ",
-    "source_type": "pubmed",
-    "style_type": "myth_buster",
-    "query": '("dietary cholesterol" OR "eggs" OR "statins" OR "omega-3 fatty acids" OR "coffee") AND ("atherosclerosis" OR "cardiovascular") AND ("meta-analysis" OR "systematic review")',
-    "ru_theme": "Разбор популярного мифа: яйца, кофе, статины, чистки сосудов доказательной медициной",
-    "hashtags": "#Мифы_Липидограм #Доказательно #Холестерин"
-}
-
-RUBRIC_SPORT = {
-    "category": "🏃 АКТИВНОСТЬ И ЭЛАСТИЧНОСТЬ СОСУДОВ",
-    "source_type": "pubmed",
-    "style_type": "practical_guide",
-    "query": '("aerobic exercise" OR "resistance training" OR "walking") AND ("flow-mediated dilation" OR "endothelial" OR "HDL-C" OR "lipid profile") AND ("trial" OR "randomized")',
-    "ru_theme": "Простые советы по движению: быстрая прогулка после еды, 8000 шагов в день, легкий бег в комфортном разговорном темпе без одышки, домашняя зарядка для сосудов",
-    "hashtags": "#Движение_Липидограм #ЗдоровьеСердца #Прогулки #ЭластичностьСосудов"
-}
-
-RUBRIC_ACADEMIC_SCIENCE = {
-    "category": "🔬 НАУЧНЫЙ ДАЙДЖЕСТ (РКО / PUBMED)",
-    "source_type": "rko",
-    "style_type": "expert_review",
-    "query": "липиды холестерин",
-    "ru_theme": "Клинические новости Российского кардиологического общества (РКО) и новейшие мета-анализы",
-    "hashtags": "#Липидограм_Наука #РКО #Кардиология #ЛПНП"
-}
+RECIPE_IDEAS_QUERIES = [
+    '("soluble fiber" OR "legumes" OR "lentils" OR "chickpeas" OR "barley") AND ("LDL cholesterol") AND ("human")',
+    '("extra virgin olive oil" OR "walnuts" OR "almonds" OR "polyphenols") AND ("endothelial" OR "lipid profile")',
+    '("psyllium" OR "oat beta-glucan" OR "flaxseed") AND ("apolipoprotein B" OR "cholesterol lowering")'
+]
 
 SYSTEM_PROMPT = """
-Ты — главный редактор русскоязычного Telegram-канала «Липидограм» (@lipidogram).
-Твоя задача — написать яркий, легкий и увлекательный пост простым человеческим языком.
+Ты — профессиональный медицинский научный журналист и главный редактор Telegram-канала «Липидограм» (@lipidogram).
+Твоя задача — проанализировать предоставленный РЕАЛЬНЫЙ первоисточник (научную статью или выступление эксперта) и написать авторскую, глубокую и понятную выжимку.
 
-КАТЕГОРИЧЕСКИЙ ЗАПРЕТ:
-- ЗАПРЕЩЕНО писать «Зона 2» без понятного объяснения. Пиши: «прогулка быстрым шагом», «бег в разговорном темпе без одышки», «8000 шагов».
-
-ТРЕБОВАНИЯ К ТЕКСТУ ("post_text"):
-- Объем: строго 500-750 символов (для идеального размещения в подписи к фото).
-- Разрешенные теги: <b>, </b>, <i>, </i>, <code>, </code>, <a href="...">.
-- Знаки < и > пиши словами («менее», «более») или экранируй (&lt; и &gt;).
-- В самом конце кликабельная ссылка на предоставленный URL первоисточника и хештеги.
+ГЛАВНЫЕ ПРАВИЛА:
+1. Пиши ТОЛЬКО на основе фактов из предоставленного текста первоисточника. Никаких выдуманных общих фраз.
+2. Текст должен быть живым, конкретным: с указанием точных цифр, механизмов (например: как клетчатка связывает желчные кислоты, почему важен ApoB, как снизились маркеры в исследовании).
+3. ЗАПРЕЩЕНЫ заезженные клише: «боул», «суперфуд», «чудо-средство», а также шаблонные абстрактные советы.
+4. Объем текста: 600-850 символов (идеально для чтения под фото).
+5. Разрешенные HTML теги: <b>, </b>, <i>, </i>, <code>, </code>, <a href="...">.
+6. В самом конце обязательно кликабельная ссылка на первоисточник и хештеги.
 
 ТРЕБОВАНИЯ К IMAGE PROMPT ("image_prompt"):
 - На АНГЛИЙСКОМ языке.
-- Описывай конкретную фотореалистичную сцену для генерации (например: "Close-up of fresh grilled salmon with avocado and spinach salad on black ceramic plate, professional restaurant food photography, 8k resolution, soft studio lighting").
+- Описывай строго реалистичный кадр (например: "Close-up of fresh steamed salmon with asparagus and extra virgin olive oil, fine dining photography, 8k, natural light").
 
 ВЕРНИ ОТВЕТ СТРОГО В JSON:
 {
@@ -139,7 +130,6 @@ SYSTEM_PROMPT = """
 """
 
 def parse_model_json(raw_text: str) -> tuple[str, str]:
-    """Извлекает post_text и image_prompt из текста ответа модели."""
     if not raw_text:
         return None, None
     clean_str = raw_text.strip()
@@ -179,12 +169,12 @@ async def generate_kie_text_and_prompt(user_prompt: str) -> tuple[str, str]:
         "contents": [
             {
                 "parts": [
-                    {"text": f"{SYSTEM_PROMPT}\n\nЗАДАНИЕ:\n{user_prompt}"}
+                    {"text": f"{SYSTEM_PROMPT}\n\nЗАДАНИЕ НА ОСНОВЕ ПЕРВОИСТОЧНИКА:\n{user_prompt}"}
                 ]
             }
         ],
         "generationConfig": {
-            "temperature": 0.75,
+            "temperature": 0.7,
             "responseMimeType": "application/json"
         }
     }
@@ -195,32 +185,26 @@ async def generate_kie_text_and_prompt(user_prompt: str) -> tuple[str, str]:
             {"role": "system", "content": f"{SYSTEM_PROMPT}\n\nВерни ТОЛЬКО валидный JSON с ключами post_text и image_prompt."},
             {"role": "user", "content": user_prompt}
         ],
-        "temperature": 0.75
+        "temperature": 0.7
     }
 
     endpoints = [
-        # 1. Google Gemini Native format (v1 & v1beta)
         ("gemini_native", f"https://api.kie.ai/gemini/v1beta/models/gemini-3.7-flash:generateContent?key={KIE_KEY}", gemini_payload),
         ("gemini_native", f"https://api.kie.ai/gemini/v1/models/gemini-3.7-flash:generateContent?key={KIE_KEY}", gemini_payload),
-        ("gemini_native", f"https://api.kie.ai/gemini/v1/models/gemini-3-7-flash:generateContent?key={KIE_KEY}", gemini_payload),
-        # 2. OpenAI-compatible chat format in KIE.ai
         ("chat_completions", "https://api.kie.ai/api/v1/chat/completions", openai_payload),
         ("chat_completions", "https://api.kie.ai/v1/chat/completions", openai_payload)
     ]
 
     last_error = ""
-
     async with aiohttp.ClientSession() as session:
-        # 2 попытки с перебором эндпоинтов
         for retry in range(1, 3):
             for mode, target_url, payload in endpoints:
                 try:
-                    logging.info(f"Запрос в KIE.ai Gemini (попытка {retry}, url: {target_url[:55]}...)...")
-                    async with session.post(target_url, headers=headers, json=payload, timeout=aiohttp.ClientTimeout(total=40)) as resp:
+                    async with session.post(target_url, headers=headers, json=payload, timeout=aiohttp.ClientTimeout(total=45)) as resp:
                         if resp.status == 200:
                             raw_json = await resp.json()
                             if isinstance(raw_json, dict) and (raw_json.get("code") in [500, 400, 401, 403] or "Server exception" in str(raw_json)):
-                                last_error = f"KIE error {raw_json.get('code')}: {raw_json.get('msg', 'Server exception')}"
+                                last_error = f"KIE error: {raw_json.get('msg', 'Server exception')}"
                                 continue
 
                             if mode == "gemini_native":
@@ -244,14 +228,13 @@ async def generate_kie_text_and_prompt(user_prompt: str) -> tuple[str, str]:
                 except Exception as e:
                     last_error = str(e)
                     continue
-            
+
             if retry < 2:
-                await asyncio.sleep(2.5)
+                await asyncio.sleep(2)
 
     raise Exception(f"KIE.ai Gemini ошибка: {last_error}")
 
 def extract_all_urls_from_any_json(obj) -> list:
-    """Рекурсивно ищет любые прямые ссылки на изображения в структуре ответа."""
     found = []
     if isinstance(obj, str):
         if obj.startswith("http") and any(ext in obj.lower() for ext in [".jpg", ".jpeg", ".png", ".webp", "kie", "cdn", "image", "oss"]):
@@ -271,7 +254,6 @@ def extract_all_urls_from_any_json(obj) -> list:
     return found
 
 async def generate_kie_image_bytes(image_prompt: str) -> bytes:
-    """Создает задачу в Nano Banana 2 Lite и ожидает готовности файла до 100 секунд."""
     if not KIE_KEY or not image_prompt:
         return None
 
@@ -282,7 +264,6 @@ async def generate_kie_image_bytes(image_prompt: str) -> bytes:
     }
 
     clean_prompt = f"Professional commercial photography, 8k resolution, photorealistic, {image_prompt}"
-
     payload = {
         "model": "nano-banana-2-lite",
         "input": {
@@ -302,14 +283,11 @@ async def generate_kie_image_bytes(image_prompt: str) -> bytes:
                     text_resp = await resp.text()
                     logging.warning(f"KIE createTask HTTP {resp.status}: {text_resp[:150]}")
                     return None
-
                 res_data = await resp.json()
 
             immediate_urls = extract_all_urls_from_any_json(res_data)
             if immediate_urls:
-                img_url = immediate_urls[0]
-                logging.info(f"Картинка получена сразу: {img_url}")
-                async with session.get(img_url, timeout=aiohttp.ClientTimeout(total=25)) as dl:
+                async with session.get(immediate_urls[0], timeout=aiohttp.ClientTimeout(total=25)) as dl:
                     if dl.status == 200:
                         return await dl.read()
 
@@ -321,10 +299,7 @@ async def generate_kie_image_bytes(image_prompt: str) -> bytes:
             )
 
             if not task_id:
-                logging.warning(f"Не найден taskId в ответе KIE: {res_data}")
                 return None
-
-            logging.info(f"Задача создана (TaskId: {task_id}). Ожидание генерации Nano Banana (до 100 сек)...")
 
             status_urls = [
                 f"https://api.kie.ai/api/v1/jobs/recordInfo?taskId={task_id}",
@@ -340,470 +315,362 @@ async def generate_kie_image_bytes(image_prompt: str) -> bytes:
                         async with session.get(s_url, headers=headers, timeout=aiohttp.ClientTimeout(total=15)) as s_resp:
                             if s_resp.status == 200:
                                 s_data = await s_resp.json()
-                                
                                 urls_in_status = extract_all_urls_from_any_json(s_data)
                                 if urls_in_status:
-                                    final_img_url = urls_in_status[0]
-                                    logging.info(f"УСПЕХ! Найдена готовая картинка KIE: {final_img_url}. Скачивание...")
-                                    async with session.get(final_img_url, timeout=aiohttp.ClientTimeout(total=30)) as dl:
+                                    async with session.get(urls_in_status[0], timeout=aiohttp.ClientTimeout(total=30)) as dl:
                                         if dl.status == 200:
                                             b_data = await dl.read()
                                             if len(b_data) > 2000:
-                                                logging.info(f"Картинка успешно скачана! Размер: {len(b_data)} байт")
                                                 return b_data
-
-                                result_data = s_data.get("data", {}) if isinstance(s_data.get("data"), dict) else s_data
-                                state = str(result_data.get("state") or result_data.get("status") or s_data.get("status") or "").lower()
-                                logging.info(f"Статус Nano Banana (шаг {attempt}/25): {state}")
-
-                                if state in ["failed", "error", "-1"]:
-                                    logging.warning(f"Ошибка генерации на стороне KIE: {s_data}")
-                                    return None
-                    except Exception as loop_e:
-                        logging.debug(f"Опрос статуса: {loop_e}")
+                    except Exception:
                         continue
-
-            logging.warning("Превышен таймаут ожидания Nano Banana (100 секунд).")
     except Exception as e:
         logging.warning(f"Ошибка вызова Nano Banana 2 Lite: {e}")
 
     return None
 
-def fetch_global_youtube_video() -> dict:
-    channel = random.choice(GLOBAL_HEALTH_CHANNELS)
+# --- ИСТОЧНИК 1: YouTube через официальные RSS-фиды каналов (без капчи и блокировок) ---
+async def fetch_real_youtube_video() -> dict:
+    selected_channel = random.choice(YOUTUBE_CHANNELS_RSS)
+    rss_url = f"https://www.youtube.com/feeds/videos.xml?channel_id={selected_channel['channel_id']}"
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+
     try:
-        import urllib.request
-        headers = {"User-Agent": "Mozilla/5.0"}
-        req = urllib.request.Request(f"https://www.youtube.com/{channel['handle']}/videos", headers=headers)
-        with urllib.request.urlopen(req, timeout=8) as response:
-            html = response.read().decode('utf-8', errors='ignore')
-            video_ids = list(dict.fromkeys(re.findall(r'"videoId":"([a-zA-Z0-9_-]{11})"', html)))
+        async with aiohttp.ClientSession() as session:
+            async with session.get(rss_url, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                if resp.status == 200:
+                    xml_text = await resp.text()
+                    root = ET.fromstring(xml_text)
+                    ns = {"atom": "http://www.w3.org/2005/Atom", "yt": "http://www.youtube.com/xml/schemas/2015", "media": "http://search.yahoo.com/mrss/"}
 
-        random.shuffle(video_ids)
+                    entries = root.findall("atom:entry", ns)
+                    if entries:
+                        entry = random.choice(entries[:5])
+                        video_id = entry.find("yt:videoId", ns).text
+                        title = entry.find("atom:title", ns).text
+                        link = entry.find("atom:link", ns).attrib.get("href")
+                        
+                        desc_elem = entry.find(".//media:description", ns)
+                        description = desc_elem.text if desc_elem is not None else ""
 
-        for vid in video_ids[:8]:
-            try:
-                transcript_list = YouTubeTranscriptApi.get_transcript(vid, languages=['en', 'en-US', 'ru'])
-                full_text = " ".join([t['text'] for t in transcript_list])
-                keywords = ["cholesterol", "ldl", "apob", "artery", "atherosclerosis", "heart", "diet", "walking", "exercise", "lipids", "statins", "omega-3", "холестерин", "сосуд", "сердц", "лпнп", "давлен", "питан", "статины", "жир", "ходьба", "спорт"]
-                if len(full_text) > 400 and any(kw in full_text.lower() for kw in keywords):
-                    yt_img = f"https://img.youtube.com/vi/{vid}/hqdefault.jpg"
-                    return {
-                        "title": f"Разбор эксперта: {channel['name']}",
-                        "journal": f"YouTube-канал {channel['name']}",
-                        "year": "2025-2026",
-                        "content": full_text[:3500],
-                        "image_url": yt_img,
-                        "url": f"https://www.youtube.com/watch?v={vid}"
-                    }
-            except Exception:
-                continue
+                        # Пытаемся получить реальный транскрипт видео
+                        transcript_text = ""
+                        try:
+                            t_list = YouTubeTranscriptApi.get_transcript(video_id, languages=['en', 'ru', 'en-US'])
+                            transcript_text = " ".join([t['text'] for t in t_list[:100]])
+                        except Exception:
+                            transcript_text = description
+
+                        content_summary = f"Название видео: {title}\nОписание/Транскрипт:\n{transcript_text[:2500]}"
+                        yt_img = f"https://img.youtube.com/vi/{video_id}/hqdefault.jpg"
+
+                        return {
+                            "title": title,
+                            "expert": selected_channel["expert"],
+                            "journal": f"YouTube-канал {selected_channel['name']}",
+                            "content": content_summary,
+                            "image_url": yt_img,
+                            "url": link
+                        }
     except Exception as e:
-        logging.warning(f"Ошибка YouTube {channel['name']}: {e}")
+        logging.warning(f"Ошибка парсинга YouTube RSS: {e}")
 
-    return {
-        "title": "Популярный видеоразбор о здоровье сердца и сосудов",
-        "journal": f"YouTube-канал {channel['name']}",
-        "year": "2025-2026",
-        "content": "Подробный разбор факторов риска, холестерина, пользы ежедневных прогулок быстрым шагом и оптимизации питания.",
-        "image_url": None,
-        "url": f"https://www.youtube.com/{channel['handle']}"
-    }
+    # Резервный поиск по PubMed кардиологического видео-доклада
+    return await fetch_pubmed_study('("Cardiovascular" OR "Atherosclerosis") AND ("Clinical Review" OR "Lecture")')
 
-def decode_mime_words(s):
-    if not s:
-        return ""
-    decoded_parts = decode_header(s)
-    result = []
-    for part, enc in decoded_parts:
-        if isinstance(part, bytes):
-            result.append(part.decode(enc or "utf-8", errors="ignore"))
-        else:
-            result.append(part)
-    return "".join(result)
+# --- ИСТОЧНИК 2: PubMed / NCBI с полным абстрактом ---
+async def fetch_pubmed_study(custom_query: str = None) -> dict:
+    if custom_query:
+        query = custom_query
+    else:
+        topic = random.choice(PUBMED_SEARCH_TOPICS)
+        query = topic["query"]
 
-def fetch_rko_from_email() -> dict:
-    if not (EMAIL_USER and EMAIL_PASS):
-        return None
+    search_url = f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&term={urllib.parse.quote(query)}&mindate=2023/01/01&maxdate=2026/12/31&retmax=15&sort=pub_date&retmode=json"
+    headers = {"User-Agent": "Mozilla/5.0"}
+
     try:
-        mail = imaplib.IMAP4_SSL(EMAIL_HOST)
-        mail.login(EMAIL_USER, EMAIL_PASS)
-        mail.select("inbox")
+        async with aiohttp.ClientSession() as session:
+            async with session.get(search_url, headers=headers, timeout=aiohttp.ClientTimeout(total=8)) as res:
+                if res.status == 200:
+                    data = await res.json()
+                    id_list = data.get("esearchresult", {}).get("idlist", [])
+                    if id_list:
+                        random.shuffle(id_list)
+                        for pmid in id_list[:5]:
+                            fetch_url = f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=pubmed&id={pmid}&retmode=xml"
+                            async with session.get(fetch_url, headers=headers, timeout=aiohttp.ClientTimeout(total=8)) as xml_res:
+                                if xml_res.status == 200:
+                                    xml_bytes = await xml_res.read()
+                                    root = ET.fromstring(xml_bytes)
+                                    article = root.find(".//Article")
+                                    if article is None:
+                                        continue
 
-        status, messages = mail.search(None, '(OR (FROM "scardio") (SUBJECT "РКО"))')
-        if status != "OK" or not messages[0]:
-            status, messages = mail.search(None, 'UNSEEN')
-            
-        if not messages[0]:
-            mail.logout()
-            return None
+                                    title_elem = article.find("ArticleTitle")
+                                    title = "".join(title_elem.itertext()) if title_elem is not None else "Cardiovascular Clinical Study"
 
-        latest_id = messages[0].split()[-1]
-        res, msg_data = mail.fetch(latest_id, "(RFC822)")
-        msg = email.message_from_bytes(msg_data[0][1])
+                                    journal_elem = article.find(".//Journal/Title")
+                                    journal = journal_elem.text if journal_elem is not None else "PubMed"
 
-        subject = decode_mime_words(msg["Subject"])
-        body = ""
-        found_links = []
+                                    year_elem = article.find(".//JournalIssue/PubDate/Year")
+                                    year = year_elem.text if year_elem is not None else "2024-2026"
 
-        if msg.is_multipart():
-            for part in msg.walk():
-                ctype = part.get_content_type()
-                if ctype == "text/plain":
-                    body += part.get_payload(decode=True).decode("utf-8", errors="ignore")
-                elif ctype == "text/html":
-                    soup = BeautifulSoup(part.get_payload(decode=True).decode("utf-8", errors="ignore"), "html.parser")
-                    body += soup.get_text(separator="\n", strip=True)
-                    for a in soup.find_all("a", href=True):
-                        href = a["href"]
-                        if "scardio.ru" in href or "http" in href:
-                            found_links.append(href)
-        else:
-            body = msg.get_payload(decode=True).decode("utf-8", errors="ignore")
+                                    abstract_texts = root.findall(".//Abstract/AbstractText")
+                                    abstract = "\n".join(["".join(elem.itertext()) for elem in abstract_texts if elem is not None])
 
-        mail.store(latest_id, '+FLAGS', '\\Seen')
-        mail.logout()
-
-        return {
-            "title": subject,
-            "journal": "Официальная рассылка Российского кардиологического общества (РКО)",
-            "year": "2025-2026",
-            "content": body[:2500],
-            "url": found_links[0] if found_links else "https://scardio.ru/news/novosti_obschestva/"
-        }
-    except Exception as e:
-        logging.warning(f"Ошибка проверки почты РКО: {e}")
-        return None
-
-def fetch_rko_news() -> dict:
-    email_data = fetch_rko_from_email()
-    if email_data:
-        return email_data
-
-    base_section_url = "https://scardio.ru/news/novosti_obschestva/"
-    try:
-        import urllib.request
-        req = urllib.request.Request(base_section_url, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req, timeout=8) as resp:
-            soup = BeautifulSoup(resp.read().decode('utf-8', errors='ignore'), "html.parser")
-            links = soup.find_all("a", href=True)
-            valid_news = []
-            for a in links:
-                href = a["href"]
-                title = a.get_text(strip=True)
-                if "/news/novosti_obschestva/" in href and len(title) > 20 and href != "/news/novosti_obschestva/":
-                    full_url = f"https://scardio.ru{href}" if href.startswith("/") else href
-                    valid_news.append({"title": title, "url": full_url})
-            
-            if valid_news:
-                selected = random.choice(valid_news[:10])
-                content_desc = ""
-                try:
-                    art_req = urllib.request.Request(selected["url"], headers={"User-Agent": "Mozilla/5.0"})
-                    with urllib.request.urlopen(art_req, timeout=5) as art_resp:
-                        art_soup = BeautifulSoup(art_resp.read().decode('utf-8', errors='ignore'), "html.parser")
-                        paragraphs = [p.get_text(strip=True) for p in art_soup.find_all("p") if len(p.get_text(strip=True)) > 30]
-                        content_desc = "\n".join(paragraphs[:4])
-                except Exception:
-                    pass
-
-                return {
-                    "title": selected["title"],
-                    "journal": "Российское кардиологическое общество (РКО)",
-                    "year": "2025-2026",
-                    "content": content_desc if content_desc else selected["title"],
-                    "url": selected["url"]
-                }
-    except Exception as e:
-        logging.warning(f"Ошибка новостей РКО: {e}")
-
-    return {
-        "title": "Новости Российского кардиологического общества",
-        "journal": "РКО (scardio.ru)",
-        "year": "2025-2026",
-        "content": "Актуальные новости кардиологии и клинические стандарты.",
-        "url": base_section_url
-    }
-
-def fetch_pubmed_study_with_abstract(query: str) -> dict:
-    try:
-        import urllib.request
-        search_url = f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&term={urllib.parse.quote(query)}&retmax=10&sort=pub_date&retmode=json"
-        req = urllib.request.Request(search_url, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req, timeout=7) as res:
-            data = json.loads(res.read().decode('utf-8'))
-            id_list = data.get("esearchresult", {}).get("idlist", [])
-
-        if not id_list:
-            return None
-
-        random.shuffle(id_list)
-
-        for pmid in id_list[:4]:
-            fetch_url = f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=pubmed&id={pmid}&retmode=xml"
-            fetch_req = urllib.request.Request(fetch_url, headers={"User-Agent": "Mozilla/5.0"})
-            with urllib.request.urlopen(fetch_req, timeout=7) as xml_res:
-                xml_content = xml_res.read()
-
-            root = ET.fromstring(xml_content)
-            article = root.find(".//Article")
-            if article is None:
-                continue
-
-            title_elem = article.find("ArticleTitle")
-            title = "".join(title_elem.itertext()) if title_elem is not None else "Cardiovascular Study"
-
-            journal_elem = article.find(".//Journal/Title")
-            journal = journal_elem.text if journal_elem is not None else "PubMed"
-
-            year_elem = article.find(".//JournalIssue/PubDate/Year")
-            year = year_elem.text if year_elem is not None else "2024-2026"
-
-            abstract_texts = root.findall(".//Abstract/AbstractText")
-            if not abstract_texts:
-                continue
-
-            abstract = "\n".join(["".join(elem.itertext()) for elem in abstract_texts if elem is not None])
-            if len(abstract) < 100:
-                continue
-
-            return {
-                "pmid": pmid,
-                "title": title,
-                "journal": journal,
-                "year": year,
-                "abstract": abstract[:2500],
-                "url": f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/"
-            }
+                                    if len(abstract) > 120:
+                                        return {
+                                            "pmid": pmid,
+                                            "title": title,
+                                            "journal": f"{journal} ({year})",
+                                            "content": f"Title: {title}\nJournal: {journal} ({year})\nAbstract:\n{abstract[:3000]}",
+                                            "url": f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/"
+                                        }
     except Exception as e:
         logging.error(f"Ошибка PubMed API: {e}")
+
     return None
+
+# --- ИСТОЧНИК 3: Российское кардиологическое общество (РКО) ---
+async def fetch_rko_news() -> dict:
+    base_section_url = "https://scardio.ru/news/novosti_obschestva/"
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(base_section_url, headers=headers, timeout=aiohttp.ClientTimeout(total=8)) as resp:
+                if resp.status == 200:
+                    html_text = await resp.text()
+                    soup = BeautifulSoup(html_text, "html.parser")
+                    links = soup.find_all("a", href=True)
+                    valid_news = []
+                    for a in links:
+                        href = a["href"]
+                        title = a.get_text(strip=True)
+                        if "/news/novosti_obschestva/" in href and len(title) > 25 and href != "/news/novosti_obschestva/":
+                            full_url = f"https://scardio.ru{href}" if href.startswith("/") else href
+                            valid_news.append({"title": title, "url": full_url})
+
+                    if valid_news:
+                        selected = random.choice(valid_news[:8])
+                        article_text = selected["title"]
+                        try:
+                            async with session.get(selected["url"], headers=headers, timeout=aiohttp.ClientTimeout(total=6)) as art_resp:
+                                if art_resp.status == 200:
+                                    art_html = await art_resp.text()
+                                    art_soup = BeautifulSoup(art_html, "html.parser")
+                                    paras = [p.get_text(strip=True) for p in art_soup.find_all("p") if len(p.get_text(strip=True)) > 40]
+                                    if paras:
+                                        article_text = "\n".join(paras[:5])
+                        except Exception:
+                            pass
+
+                        return {
+                            "title": selected["title"],
+                            "journal": "Российское кардиологическое общество (РКО)",
+                            "content": f"Заголовок: {selected['title']}\nТекст статьи:\n{article_text[:2500]}",
+                            "url": selected["url"]
+                        }
+    except Exception as e:
+        logging.warning(f"Ошибка РКО: {e}")
+
+    # Если сайт РКО недоступен, берем рецензируемую статью по кардиологии из PubMed
+    return await fetch_pubmed_study('("Russian" OR "guidelines" OR "cardiology") AND ("dyslipidemia" OR "atherosclerosis")')
 
 def sanitize_html_for_telegram(text: str) -> str:
     if not text:
         return ""
-    if not isinstance(text, str):
-        text = str(text)
-
+    text = str(text)
     allowed_tags = ['<b>', '</b>', '<i>', '</i>', '<code>', '</code>', '</a>']
     placeholders = {}
-    
+
     def repl_tag(match):
         key = f"__TAG_{len(placeholders)}__"
         placeholders[key] = match.group(0)
         return key
-    
+
     text = re.sub(r'<a\s+href=["\'][^"\']+["\']>', repl_tag, text, flags=re.IGNORECASE)
     for tag in allowed_tags:
         text = re.sub(re.escape(tag), repl_tag, text, flags=re.IGNORECASE)
-    
+
     text = text.replace('<', '&lt;').replace('>', '&gt;')
     for key, val in placeholders.items():
         text = text.replace(key, val)
     return text
 
-def pick_rubric_by_schedule() -> dict:
-    now = datetime.now()
-    weekday = now.weekday()
-    hour = now.hour
-
-    if weekday in [0, 3, 5] and hour < 14:
-        return RUBRIC_ACADEMIC_SCIENCE
-
-    if hour >= 14:
-        if weekday in [0, 2, 5]:
-            return RUBRIC_RECIPES
-        else:
-            return RUBRIC_SPORT
-
-    if weekday in [1, 6]:
-        return RUBRIC_YOUTUBE
-    else:
-        return RUBRIC_MYTHS
-
-async def generate_and_publish_post(custom_rubric: dict = None, with_image: bool = True) -> tuple[bool, str]:
+async def generate_and_publish_post(mode: str = "auto", with_image: bool = True) -> tuple[bool, str]:
     if not KIE_KEY:
-        err = "KIE_API_KEY не установлен в переменных окружения!"
-        logging.error(err)
-        return False, err
-
+        return False, "KIE_API_KEY не установлен!"
     if not bot_poster:
-        err = "Бот для отправки не настроен!"
-        logging.error(err)
-        return False, err
+        return False, "Бот для отправки не настроен!"
 
-    rubric = custom_rubric or pick_rubric_by_schedule()
-    style = rubric.get("style_type", "expert_review")
-    logging.info(f"Запуск рубрики: {rubric['category']} (стиль: {style}, генерация арта: {with_image})")
-
+    study = None
+    category = ""
+    hashtags = ""
     img_bytes = None
 
-    if rubric.get("source_type") == "youtube":
-        study = fetch_global_youtube_video()
-        if with_image and study.get("image_url"):
+    if mode == "youtube":
+        study = await fetch_real_youtube_video()
+        category = "📺 МИРОВОЙ НАУЧПОП / ВЫЖИМКА"
+        hashtags = "#Липидограм_Видео #Научпоп #Долголетие #ЗдоровьеСосудов"
+        if with_image and study and study.get("image_url"):
             try:
                 async with aiohttp.ClientSession() as yt_s:
-                    async with yt_s.get(study["image_url"], timeout=aiohttp.ClientTimeout(total=10)) as yt_r:
+                    async with yt_s.get(study["image_url"], timeout=aiohttp.ClientTimeout(total=8)) as yt_r:
                         if yt_r.status == 200:
                             img_bytes = await yt_r.read()
             except Exception:
                 pass
-
-        prompt = (
-            f"Напиши пост в стиле «{style}» для Telegram-канала «Липидограм» в рубрику «{rubric['category']}».\n"
-            f"ТЕКСТ ВЫСТУПЛЕНИЯ СПИКЕРА:\n{study.get('content', '')}\n\n"
-            f"В блоке Первоисточник поставь ТОЧНО эту ссылку на видео: <a href='{study['url']}'>{study['title']} ({study['journal']})</a>.\n"
-            f"В самом конце добавь хештеги: {rubric['hashtags']}"
-        )
-    elif rubric.get("source_type") == "rko":
-        study = fetch_rko_news()
-        prompt = (
-            f"Напиши понятный и актуальный пост в стиле «{style}» для Telegram-канала «Липидограм» в рубрику «{rubric['category']}».\n"
-            f"МАТЕРИАЛ РКО:\nЗаголовок: {study['title']}\nТекст: {study.get('content', '')}\n\n"
-            f"В блоке Первоисточник поставь ТОЧНО эту ссылку: <a href='{study['url']}'>{study['title']} / {study['journal']}</a>.\n"
-            f"В самом конце добавь хештеги: {rubric['hashtags']}"
-        )
+    elif mode == "recipe":
+        rec_query = random.choice(RECIPE_IDEAS_QUERIES)
+        study = await fetch_pubmed_study(rec_query)
+        category = "🥗 ГИПОЛИПИДЕМИЧЕСКАЯ КУХНЯ И ПИТАНИЕ"
+        hashtags = "#Рецепт_ЛПНП #УмнаяЗамена #ПитаниеСердца #Клетчатка"
+    elif mode == "science":
+        study = await fetch_rko_news()
+        category = "🔬 НАУЧНЫЙ ДАЙДЖЕСТ (РКО / PUBMED)"
+        hashtags = "#Липидограм_Наука #РКО #Кардиология #ЛПНП"
+    elif mode == "myth":
+        study = await fetch_pubmed_study('("dietary cholesterol" OR "eggs" OR "statins" OR "omega-3" OR "coffee") AND ("meta-analysis")')
+        category = "💡 РАЗБОР МИФОВ ДОКАЗАТЕЛЬНОЙ МЕДИЦИНОЙ"
+        hashtags = "#Мифы_Липидограм #Доказательно #Холестерин"
     else:
-        study = fetch_pubmed_study_with_abstract(rubric['query'])
-        if study:
-            prompt = (
-                f"Напиши пост в стиле «{style}» для Telegram-канала «Липидограм» в рубрику «{rubric['category']}».\n"
-                f"Тема: {rubric['ru_theme']}\n\n"
-                f"ДАННЫЕ ИССЛЕДОВАНИЯ:\nЗаголовок: {study['title']}\nЖурнал: {study['journal']} ({study['year']})\nPMID: {study['pmid']}\n"
-                f"Аннотация:\n{study['abstract']}\n\n"
-                f"В блоке Первоисточник поставь ТОЧНО эту ссылку: <a href='{study['url']}'>{study['title']} / {study['journal']} (PMID: {study['pmid']})</a>.\n"
-                f"В самом конце добавь хештеги: {rubric['hashtags']}"
-            )
-        else:
-            prompt = (
-                f"Напиши классный пост в стиле «{style}» для Telegram-канала «Липидограм» в рубрику «{rubric['category']}» на тему: {rubric['ru_theme']}.\n"
-                f"В первоисточнике укажи ссылку: <a href='https://scardio.ru/news/novosti_obschestva/'>Новости Российского кардиологического общества (РКО)</a>.\n"
-                f"В самом конце добавь хештеги: {rubric['hashtags']}"
-            )
+        # Авто-ротация случайной свежей темы
+        modes = ["youtube", "recipe", "science", "myth", "pubmed_random"]
+        chosen = random.choice(modes)
+        return await generate_and_publish_post(mode=chosen, with_image=with_image)
+
+    if not study:
+        study = await fetch_pubmed_study()
+
+    if not study:
+        return False, "Не удалось получить первоисточник для поста."
+
+    prompt = (
+        f"Рубрика канала: «{category}».\n"
+        f"ДАННЫЕ РЕАЛЬНОГО ПЕРВОИСТОЧНИКА:\n{study.get('content', '')}\n\n"
+        f"Сделай емкую, глубокую авторскую выжимку этого материала.\n"
+        f"В самом конце обязательно укажи первоисточник с ТОЧНОЙ ссылкой:\n"
+        f"🔗 <a href='{study['url']}'>{study['title']} ({study.get('journal', 'Источник')})</a>\n"
+        f"{hashtags}"
+    )
 
     try:
         post_text, image_prompt = await generate_kie_text_and_prompt(prompt)
         if not post_text:
-            return False, "Ошибка: модель вернула пустой текст поста."
+            return False, "Модель вернула пустой ответ."
     except Exception as e:
-        return False, f"Ошибка генерации текста: {e}"
+        return False, f"Ошибка Gemini 3.7: {e}"
 
     if with_image and not img_bytes and image_prompt:
         img_bytes = await generate_kie_image_bytes(image_prompt)
 
-    try:
-        clean_html = sanitize_html_for_telegram(post_text)
+    clean_html = sanitize_html_for_telegram(post_text)
 
+    # Безопасная отправка с защитой от Flood Control
+    try:
         if img_bytes and len(img_bytes) > 2000:
             photo_file = BufferedInputFile(img_bytes, filename="lipidogram_art.jpg")
-            
             if len(clean_html) <= 1024:
-                sent_msg = await bot_poster.send_photo(
-                    chat_id=CHANNEL_ID,
-                    photo=photo_file,
-                    caption=clean_html,
-                    parse_mode="HTML"
-                )
+                await bot_poster.send_photo(chat_id=CHANNEL_ID, photo=photo_file, caption=clean_html, parse_mode="HTML")
             else:
                 await bot_poster.send_photo(chat_id=CHANNEL_ID, photo=photo_file)
-                sent_msg = await bot_poster.send_message(
-                    chat_id=CHANNEL_ID,
-                    text=clean_html,
-                    parse_mode="HTML",
-                    disable_web_page_preview=False
-                )
-            logging.info(f"Пост с фото опубликован! ID: {sent_msg.message_id}")
-            return True, f"Опубликован пост («{rubric['category']}») с иллюстрацией Nano Banana!"
+                await bot_poster.send_message(chat_id=CHANNEL_ID, text=clean_html, parse_mode="HTML", disable_web_page_preview=False)
+            return True, f"Опубликован пост («{category}») с иллюстрацией!"
 
-        sent_msg = await bot_poster.send_message(
-            chat_id=CHANNEL_ID,
-            text=clean_html,
-            parse_mode="HTML",
-            disable_web_page_preview=False
-        )
-        return True, f"Опубликован пост (только текст Gemini 3.7) в рубрике «{rubric['category']}»."
+        await bot_poster.send_message(chat_id=CHANNEL_ID, text=clean_html, parse_mode="HTML", disable_web_page_preview=False)
+        return True, f"Опубликован пост («{category}») без фото."
+    except TelegramRetryAfter as flood_err:
+        await asyncio.sleep(flood_err.retry_after + 1)
+        await bot_poster.send_message(chat_id=CHANNEL_ID, text=clean_html, parse_mode="HTML")
+        return True, f"Опубликован пост («{category}») после ожидания Flood Control."
     except Exception as e:
         return False, f"Ошибка отправки в Telegram: {e}"
 
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     await message.reply(
-        "🫀 <b>Медиа-бот «Липидограм»</b>\n\n"
-        "<b>Команды с генерацией арта (Nano Banana 2 Lite + Gemini 3.7):</b>\n"
-        "• /post_now — публикация по текущему расписанию с фото\n"
-        "• /post_youtube — видеовыжимка мировых экспертов\n"
-        "• /post_recipe — кулинарная карточка с фото\n"
-        "• /post_myth — разбор мифа с фото\n\n"
-        "<b>🧪 Тестовые команды БЕЗ картинки (только Gemini 3.7, 0 кредитов арта):</b>\n"
-        "• /test_text — быстрый пост по расписанию (только текст)\n"
-        "• /test_youtube — проверка выжимки YouTube\n"
+        "🫀 <b>Медиа-бот «Липидограм» 2.0</b>\n\n"
+        "<b>Команды с артом (Gemini 3.7 + Nano Banana 2 Lite):</b>\n"
+        "• /post_now — случайный пост из свежих источников с фото\n"
+        "• /post_youtube — реальная выжимка свежего YouTube видео\n"
+        "• /post_recipe — доказательный рецепт с фото\n"
+        "• /post_science — клинический дайджест РКО/PubMed\n"
+        "• /post_myth — разбор мифа\n\n"
+        "<b>🧪 Тестовые команды БЕЗ картинки (0 кредитов, мгновенно):</b>\n"
+        "• /test_text — случайный пост (только текст)\n"
+        "• /test_youtube — проверка реального YouTube видео\n"
         "• /test_recipe — проверка рецепта (только текст)\n"
-        "• /test_myth — проверка мифа (только текст)\n"
-        "• /test_science — научный дайджест РКО / PubMed",
+        "• /test_science — проверка статьи РКО / PubMed\n"
+        "• /test_myth — проверка мифа",
         parse_mode="HTML"
     )
 
-# --- Команды с полной генерацией арта ---
 @dp.message(Command("post_now"))
 async def cmd_post_now(message: types.Message):
-    await message.reply("⏳ Gemini 3.7 формирует пост, а Nano Banana 2 Lite создает арт (ожидание до 60-90 сек)...")
-    success, res = await generate_and_publish_post(with_image=True)
+    await message.reply("⏳ Ищу свежую научную статью и генерирую пост с иллюстрацией...")
+    success, res = await generate_and_publish_post(mode="auto", with_image=True)
     await message.reply("✅ " + res if success else "❌ " + res)
 
 @dp.message(Command("post_youtube"))
 async def cmd_post_yt(message: types.Message):
-    await message.reply("🎬 Забираю видео и формирую выжимку...")
-    success, res = await generate_and_publish_post(RUBRIC_YOUTUBE, with_image=True)
+    await message.reply("🎬 Забираю свежий ролик через RSS экспертов и создаю пост с фото...")
+    success, res = await generate_and_publish_post(mode="youtube", with_image=True)
     await message.reply("✅ " + res if success else "❌ " + res)
 
 @dp.message(Command("post_recipe"))
 async def cmd_post_rec(message: types.Message):
-    await message.reply("🥗 Nano Banana 2 Lite генерирует фото блюда и рецепт (ожидание до 60-90 сек)...")
-    success, res = await generate_and_publish_post(RUBRIC_RECIPES, with_image=True)
+    await message.reply("🥗 Ищу клинические данные по гиполипидемической диете...")
+    success, res = await generate_and_publish_post(mode="recipe", with_image=True)
+    await message.reply("✅ " + res if success else "❌ " + res)
+
+@dp.message(Command("post_science"))
+async def cmd_post_sci(message: types.Message):
+    await message.reply("🔬 Анализирую материалы РКО / PubMed...")
+    success, res = await generate_and_publish_post(mode="science", with_image=True)
     await message.reply("✅ " + res if success else "❌ " + res)
 
 @dp.message(Command("post_myth"))
 async def cmd_post_my(message: types.Message):
-    await message.reply("💡 Gemini 3.7 развенчивает миф, Nano Banana генерирует арт...")
-    success, res = await generate_and_publish_post(RUBRIC_MYTHS, with_image=True)
+    await message.reply("💡 Разбираю миф по мета-анализам...")
+    success, res = await generate_and_publish_post(mode="myth", with_image=True)
     await message.reply("✅ " + res if success else "❌ " + res)
 
-# --- Тестовые команды БЕЗ генерации картинки (быстро, 0 кредитов) ---
+# --- Тестовые команды без картинок ---
 @dp.message(Command("test_text"))
 async def cmd_test_text(message: types.Message):
-    await message.reply("⚡ Gemini 3.7 генерирует тестовый пост без картинки...")
-    success, res = await generate_and_publish_post(with_image=False)
+    await message.reply("⚡ Gemini 3.7 анализирует случайную статью (без фото)...")
+    success, res = await generate_and_publish_post(mode="auto", with_image=False)
     await message.reply("✅ " + res if success else "❌ " + res)
 
 @dp.message(Command("test_youtube"))
 async def cmd_test_yt(message: types.Message):
-    await message.reply("⚡ Забираю YouTube-транскрипт и генерирую выжимку (без арта)...")
-    success, res = await generate_and_publish_post(RUBRIC_YOUTUBE, with_image=False)
+    await message.reply("⚡ Парсю RSS эксперта YouTube и генерирую выжимку конкретного видео...")
+    success, res = await generate_and_publish_post(mode="youtube", with_image=False)
     await message.reply("✅ " + res if success else "❌ " + res)
 
 @dp.message(Command("test_recipe"))
 async def cmd_test_rec(message: types.Message):
-    await message.reply("⚡ Генерирую рецепт через Gemini 3.7 (без арта)...")
-    success, res = await generate_and_publish_post(RUBRIC_RECIPES, with_image=False)
-    await message.reply("✅ " + res if success else "❌ " + res)
-
-@dp.message(Command("test_myth"))
-async def cmd_test_my(message: types.Message):
-    await message.reply("⚡ Разбор мифа через Gemini 3.7 (без арта)...")
-    success, res = await generate_and_publish_post(RUBRIC_MYTHS, with_image=False)
+    await message.reply("⚡ Генерирую пост по питанию без арта...")
+    success, res = await generate_and_publish_post(mode="recipe", with_image=False)
     await message.reply("✅ " + res if success else "❌ " + res)
 
 @dp.message(Command("test_science"))
 async def cmd_test_sci(message: types.Message):
-    await message.reply("⚡ Научный дайджест РКО / PubMed через Gemini 3.7 (без арта)...")
-    success, res = await generate_and_publish_post(RUBRIC_ACADEMIC_SCIENCE, with_image=False)
+    await message.reply("⚡ Забираю реальную научную публикацию РКО / PubMed...")
+    success, res = await generate_and_publish_post(mode="science", with_image=False)
+    await message.reply("✅ " + res if success else "❌ " + res)
+
+@dp.message(Command("test_myth"))
+async def cmd_test_my(message: types.Message):
+    await message.reply("⚡ Разбор мифа по свежему мета-анализу...")
+    success, res = await generate_and_publish_post(mode="myth", with_image=False)
     await message.reply("✅ " + res if success else "❌ " + res)
 
 @dp.message(F.text)
 async def handle_comment(message: types.Message):
-    if message.chat.type == "private":
-        return
-    if message.sender_chat and message.sender_chat.type == "channel":
+    if message.chat.type == "private" or (message.sender_chat and message.sender_chat.type == "channel"):
         return
 
     if bot_moderator:
@@ -823,50 +690,36 @@ async def handle_comment(message: types.Message):
 
     if BAD_WORDS_PATTERN.search(text):
         is_violation = True
-        reason = "нецензурная лексика / оскорбления"
+        reason = "нецензурная лексика"
     elif SPAM_LINKS_PATTERN.search(text) and "lipidogram" not in text:
         is_violation = True
-        reason = "несогласованные ссылки / реклама"
+        reason = "реклама / спам-ссылка"
 
     if is_violation and bot_moderator:
         try:
             await message.delete()
-        except Exception as e:
-            logging.error(f"Ошибка удаления: {e}")
+        except Exception:
+            pass
 
         warnings = user_warnings.get(user_id, 0) + 1
         user_warnings[user_id] = warnings
 
         if warnings == 1:
-            await message.answer(
-                f"⚠️ {user_mention}, ваше сообщение удалено (причина: {reason}). Предупреждение: <b>1/3</b>.",
-                parse_mode="HTML"
-            )
+            await message.answer(f"⚠️ {user_mention}, сообщение удалено ({reason}). Предупреждение: 1/3.", parse_mode="HTML")
         elif warnings == 2:
             until_date = datetime.now() + timedelta(days=1)
             try:
-                await bot_moderator.restrict_chat_member(
-                    chat_id=message.chat.id,
-                    user_id=user_id,
-                    permissions=types.ChatPermissions(can_send_messages=False),
-                    until_date=until_date
-                )
-                await message.answer(
-                    f"⛔ {user_mention} переведен в режим чтения на 24 часа. Предупреждение: <b>2/3</b>.",
-                    parse_mode="HTML"
-                )
-            except Exception as e:
-                logging.error(f"Ошибка мута: {e}")
+                await bot_moderator.restrict_chat_member(chat_id=message.chat.id, user_id=user_id, permissions=types.ChatPermissions(can_send_messages=False), until_date=until_date)
+                await message.answer(f"⛔ {user_mention} переведен в режим чтения на 24 часа. (2/3).", parse_mode="HTML")
+            except Exception:
+                pass
         else:
             try:
                 await bot_moderator.ban_chat_member(chat_id=message.chat.id, user_id=user_id)
-                await message.answer(
-                    f"🚫 {user_mention} заблокирован за систематическое нарушение правил (3/3).",
-                    parse_mode="HTML"
-                )
+                await message.answer(f"🚫 {user_mention} заблокирован (3/3).", parse_mode="HTML")
                 user_warnings.pop(user_id, None)
-            except Exception as e:
-                logging.error(f"Ошибка бана: {e}")
+            except Exception:
+                pass
 
 async def handle_ping(request):
     return web.Response(text="Lipidogram Bot Service is live and active 24/7!")
@@ -885,18 +738,15 @@ async def main():
     await run_server()
 
     scheduler = AsyncIOScheduler(timezone="Europe/Moscow")
-    scheduler.add_job(generate_and_publish_post, "cron", hour=10, minute=0)
-    scheduler.add_job(generate_and_publish_post, "cron", hour=18, minute=30)
+    scheduler.add_job(generate_and_publish_post, "cron", hour=10, minute=0, args=["auto", True])
+    scheduler.add_job(generate_and_publish_post, "cron", hour=18, minute=30, args=["auto", True])
     scheduler.start()
 
     logging.info("Служба расписания и боты успешно запущены на KIE.ai!")
 
     if bot_poster:
         if bot_moderator and bot_moderator != bot_poster:
-            await asyncio.gather(
-                dp.start_polling(bot_poster),
-                dp.start_polling(bot_moderator)
-            )
+            await asyncio.gather(dp.start_polling(bot_poster), dp.start_polling(bot_moderator))
         else:
             await dp.start_polling(bot_poster)
     else:
