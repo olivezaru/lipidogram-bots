@@ -99,24 +99,45 @@ def mark_as_published(item_id_or_url: str):
 # 1. Российские научно-популярные и медицинские журналы и ленты
 RU_JOURNALS_RSS = [
     {
+        "type": "biomolecula",
+        "name": "Журнал «Биомолекула» (молекулярная медицина и биохимия)",
+        "category": "🔬 НАУЧНЫЙ ДАЙДЖЕСТ: БИОХИМИЯ И СОСУДЫ",
+        "hashtags": "#Липидограм_Наука #Биомолекула #Биохимия #Кардиология"
+    },
+    {
+        "type": "rss",
         "name": "Журнал доказательного фитнеса и питания «Зожник»",
         "rss": "https://zozhnik.ru/feed",
-        "category": "🥗 ДОКАЗАТЕЛЬНОЕ ПИТАНИЕ И ЗДОРОВЬЕ"
+        "category": "🥗 ДОКАЗАТЕЛЬНОЕ ПИТАНИЕ И ЗДОРОВЬЕ",
+        "hashtags": "#Липидограм_Наука #Зожник #ПитаниеСердца #Клетчатка"
     },
     {
+        "type": "rss",
         "name": "Хабр Научпоп (Медицина, здоровье и биохимия)",
         "rss": "https://habr.com/ru/rss/hub/health/all/?fl=ru",
-        "category": "🔬 НАУЧНЫЙ ДАЙДЖЕСТ: МЕДИЦИНА И ЗДОРОВЬЕ"
+        "category": "🔬 НАУЧНЫЙ ДАЙДЖЕСТ: МЕДИЦИНА И ЗДОРОВЬЕ",
+        "hashtags": "#Липидограм_Наука #ХабрНаука #ЗдоровьеСосудов #Кардиология"
     },
     {
+        "type": "rss",
         "name": "Хабр Биотехнологии и генетика",
         "rss": "https://habr.com/ru/rss/hub/biotech/all/?fl=ru",
-        "category": "🧬 БИОТЕХНОЛОГИИ И МОЛЕКУЛЯРНАЯ МЕДИЦИНА"
+        "category": "🧬 БИОТЕХНОЛОГИИ И МОЛЕКУЛЯРНАЯ МЕДИЦИНА",
+        "hashtags": "#Липидограм_Наука #Биотехнологии #Генетика #Кардиология"
     },
     {
+        "type": "rss",
         "name": "N+1 (Наука, физиология и медицина)",
         "rss": "https://nplus1.ru/rss",
-        "category": "🔬 ДОКАЗАТЕЛЬНАЯ МЕДИЦИНА И НАУКА"
+        "category": "🔬 ДОКАЗАТЕЛЬНАЯ МЕДИЦИНА И НАУКА",
+        "hashtags": "#Липидограм_Наука #NPlus1 #Доказательно #Кардиология"
+    },
+    {
+        "type": "rss",
+        "name": "XX2 Век (Доказательная медицина и биология)",
+        "rss": "https://22century.ru/feed",
+        "category": "🔬 НАУКА И ДОКАЗАТЕЛЬНАЯ МЕДИЦИНА",
+        "hashtags": "#Липидограм_Наука #Наука #Здоровье #Кардиология"
     }
 ]
 
@@ -169,7 +190,7 @@ RUBRIC_MYTHS = {
     "source_type": "pubmed",
     "style_type": "myth_buster",
     "query": '("dietary cholesterol" OR "eggs" OR "statins" OR "omega-3 fatty acids" OR "coffee") AND ("atherosclerosis" OR "cardiovascular") AND ("meta-analysis" OR "systematic review")',
-    "ru_theme": "Разбор популярного мифа доказательной медициной",
+    "ru_theme": "Разбор популярного мифа доказательной медициной через PubMed",
     "hashtags": "#Мифы_Липидограм #Доказательно #Холестерин"
 }
 
@@ -178,26 +199,35 @@ RUBRIC_SPORT = {
     "source_type": "pubmed",
     "style_type": "practical_guide",
     "query": '("aerobic exercise" OR "resistance training" OR "walking" OR "interval training") AND ("flow-mediated dilation" OR "endothelial" OR "HDL-C" OR "lipid profile") AND ("trial" OR "randomized")',
-    "ru_theme": "Разнообразные формы движения для сосудов и сердца",
+    "ru_theme": "Разнообразные формы движения для сосудов и сердца (исследования PubMed)",
     "hashtags": "#Движение_Липидограм #ЗдоровьеСердца #Активность #ЭластичностьСосудов"
 }
 
 RUBRIC_ACADEMIC_SCIENCE = {
-    "category": "🔬 НАУЧНЫЙ ДАЙДЖЕСТ (РКО / PUBMED)",
-    "source_type": "rko",
+    "category": "🔬 НАУЧНЫЙ ДАЙДЖЕСТ (PUBMED / РКО)",
+    "source_type": "pubmed",
     "style_type": "expert_review",
-    "query": "липиды холестерин",
-    "ru_theme": "Клинические новости Российского кардиологического общества (РКО) и мета-анализы",
-    "hashtags": "#Липидограм_Наука #РКО #Кардиология #ЛПНП"
+    "query": '("LDL cholesterol" OR "ApoB" OR "atherosclerosis" OR "statins" OR "PCSK9") AND ("cardiovascular" OR "clinical trial" OR "meta-analysis")',
+    "ru_theme": "Клинические новости PubMed, мета-анализы и доказательная кардиология",
+    "hashtags": "#Липидограм_Наука #PubMed #Кардиология #ЛПНП"
 }
 
 RUBRIC_RU_JOURNALS = {
     "category": "🇷🇺 РОССИЙСКАЯ ДОКАЗАТЕЛЬНАЯ МЕДИЦИНА",
     "source_type": "ru_journals",
     "style_type": "expert_review",
-    "ru_theme": "Статьи из ведущих российских научных изданий (Биомолекула, Хабр Наука, Зожник, N+1)",
+    "ru_theme": "Статьи из ведущих российских научных изданий (Биомолекула, Зожник, Хабр Наука, N+1, 22Век)",
     "hashtags": "#Липидограм_Наука #Доказательно #Биохимия #Кардиология"
 }
+
+ALL_RUBRICS_POOL = [
+    RUBRIC_ACADEMIC_SCIENCE,  # PubMed
+    RUBRIC_MYTHS,             # PubMed (мифы)
+    RUBRIC_SPORT,             # PubMed (спорт)
+    RUBRIC_RU_JOURNALS,       # Российские научные издания
+    RUBRIC_RECIPES,           # Рецепты гиполипидемической кухни
+    RUBRIC_YOUTUBE            # Видеоролики экспертов
+]
 
 SYSTEM_PROMPT = """
 Ты — главный редактор русскоязычного Telegram-канала «Липидограм» (@lipidogram).
@@ -492,20 +522,21 @@ def fetch_biomolecula_article() -> dict:
         logging.warning(f"Ошибка парсинга Биомолекулы: {e}")
     return None
 
-# ПАРСИНГ РОССИЙСКИХ НАУЧНЫХ ЖУРНАЛОВ (С ФИЛЬТРОМ ИСТОРИИ)
+# ПАРСИНГ РОССИЙСКИХ НАУЧНЫХ ЖУРНАЛОВ (С РАВНОМЕРНЫМ РАНДОМОМ И ФИЛЬТРОМ ИСТОРИИ)
 def fetch_russian_journals_rss() -> dict:
-    if random.random() < 0.4:
-        bio = fetch_biomolecula_article()
-        if bio:
-            return bio
-
     journals = list(RU_JOURNALS_RSS)
     random.shuffle(journals)
 
     for j in journals:
+        if j.get("type") == "biomolecula":
+            bio = fetch_biomolecula_article()
+            if bio:
+                return bio
+            continue
+
         try:
             headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-            resp = requests.get(j["rss"], headers=headers, timeout=10)
+            resp = requests.get(j["rss"], headers=headers, timeout=8)
             if resp.status_code == 200:
                 root = ET.fromstring(resp.content)
                 items = root.findall(".//item")
@@ -525,7 +556,7 @@ def fetch_russian_journals_rss() -> dict:
                     title = title_elem.text or ""
                     link = link_elem.text if link_elem.text else link_elem.attrib.get("href", "")
                     
-                    if is_already_published(link):
+                    if not link or is_already_published(link):
                         continue
 
                     raw_desc = desc_elem.text if desc_elem is not None and desc_elem.text else ""
@@ -533,7 +564,7 @@ def fetch_russian_journals_rss() -> dict:
 
                     article_text = clean_desc
                     try:
-                        art_resp = requests.get(link, headers=headers, timeout=6)
+                        art_resp = requests.get(link, headers=headers, timeout=5)
                         if art_resp.status_code == 200:
                             art_soup = BeautifulSoup(art_resp.content, "html.parser")
                             paras = [p.get_text(strip=True) for p in art_soup.find_all("p") if len(p.get_text(strip=True)) > 40]
@@ -549,15 +580,11 @@ def fetch_russian_journals_rss() -> dict:
                         "category": j["category"],
                         "content": f"Заголовок: {title}\nИздание: {j['name']}\n\nТекст статьи:\n{article_text[:2800]}",
                         "url": link,
-                        "hashtags": "#Липидограм_Наука #Доказательно #Кардиология #ПитаниеСердца"
+                        "hashtags": j.get("hashtags", "#Липидограм_Наука #Доказательно #Кардиология")
                     }
         except Exception as e:
             logging.warning(f"Ошибка парсинга журнала {j['name']}: {e}")
             continue
-
-    bio = fetch_biomolecula_article()
-    if bio:
-        return bio
 
     return fetch_rko_news()
 
@@ -890,7 +917,11 @@ async def generate_and_publish_post(custom_rubric: dict = None, with_image: bool
         logging.error(err)
         return False, err
 
-    rubric = custom_rubric or pick_rubric_by_schedule()
+    if custom_rubric:
+        rubric = custom_rubric
+    else:
+        rubric = random.choice(ALL_RUBRICS_POOL) if source_mode == "random" else pick_rubric_by_schedule()
+
     style = rubric.get("style_type", "expert_review")
     img_bytes = None
     study_id = None
@@ -1008,19 +1039,20 @@ async def generate_and_publish_post(custom_rubric: dict = None, with_image: bool
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     await message.reply(
-        "🫀 <b>Медиа-бот «Липидограм»</b>\n\n"
-        "<b>Команды с фото (Gemini 3.7 + Nano Banana 2 Lite):</b>\n"
-        "• /post_now — публикация по динамическому расписанию недели\n"
-        "• /post_recipe — реальный доказательный рецепт с фото\n"
-        "• /post_ru — пост из российских научных журналов\n"
-        "• /post_youtube — видеовыжимка (РКО, Утин, Attia)\n"
-        "• /post_myth — разбор мифа с фото\n\n"
-        "<b>🧪 Тестовые команды БЕЗ картинки (0 кредитов, мгновенно):</b>\n"
-        "• /test_text — случайный пост из всех рубрик\n"
-        "• /test_recipe — проверка реального рецепта\n"
-        "• /test_ru — проверка российских журналов\n"
-        "• /test_youtube — проверка реального YouTube видео\n"
-        "• /test_myth — проверка мифа",
+        "🫀 <b>Медиа-бот «Липидограм» (@lipidogram)</b>\n\n"
+        "🎲 <b>СЛУЧАЙНЫЙ ПОСТ ИЗ ЛЮБОЙ РУБРИКИ И ИСТОЧНИКА:</b>\n"
+        "• <b>/test_random</b> — 🧪 быстрый тест <b>БЕЗ картинки</b> (PubMed, РосЖурналы, YouTube, Рецепты, Мифы, Спорт). 0 кредитов, 2 сек.\n"
+        "• <b>/post_random</b> — 🎨 полный пост <b>С генерацией арта</b> Nano Banana 2 Lite из случайного источника.\n\n"
+        "<b>📌 Тематические команды БЕЗ картинки (быстро, 0 кредитов):</b>\n"
+        "• /test_pubmed — свежее исследование PubMed (мета-анализы, липиды)\n"
+        "• /test_ru — российские журналы (Биомолекула, Зожник, Хабр, N+1, 22Век)\n"
+        "• /test_recipe — гиполипидемический рецепт\n"
+        "• /test_youtube — выжимка видео (РКО, Утин, Гаглошвили, Attia)\n"
+        "• /test_myth — разбор мифа через PubMed\n\n"
+        "<b>🖼 Публикации С картинкой Nano Banana 2 Lite:</b>\n"
+        "• /post_now — по расписанию дня\n"
+        "• /post_pubmed — исследование PubMed с иллюстрацией\n"
+        "• /post_ru — российские журналы с иллюстрацией",
         parse_mode="HTML"
     )
 
@@ -1029,6 +1061,18 @@ async def cmd_start(message: types.Message):
 async def cmd_post_now(message: types.Message):
     await message.reply("⏳ Gemini 3.7 формирует пост по расписанию недели, Nano Banana создает арт...")
     success, res = await generate_and_publish_post(with_image=True)
+    await message.reply("✅ " + res if success else "❌ " + res)
+
+@dp.message(Command("post_random"))
+async def cmd_post_random(message: types.Message):
+    await message.reply("🎲 Выбираю случайный источник (PubMed, РосЖурналы, YouTube, Рецепты, Мифы), пишу пост и генерирую арт...")
+    success, res = await generate_and_publish_post(with_image=True, source_mode="random")
+    await message.reply("✅ " + res if success else "❌ " + res)
+
+@dp.message(Command("post_pubmed"))
+async def cmd_post_pubmed(message: types.Message):
+    await message.reply("🔬 Ищу исследование в PubMed и создаю арт...")
+    success, res = await generate_and_publish_post(RUBRIC_ACADEMIC_SCIENCE, with_image=True)
     await message.reply("✅ " + res if success else "❌ " + res)
 
 @dp.message(Command("post_recipe"))
@@ -1055,7 +1099,19 @@ async def cmd_post_my(message: types.Message):
     success, res = await generate_and_publish_post(RUBRIC_MYTHS, with_image=True)
     await message.reply("✅ " + res if success else "❌ " + res)
 
-# --- Тестовые команды БЕЗ генерации картинки (быстро, 0 кредитов) ---
+# --- Тестовые команды БЕЗ генерации картинки (0 кредитов KIE, быстро) ---
+@dp.message(Command("test_random", "test_any", "test_all", "test_text"))
+async def cmd_test_random(message: types.Message):
+    await message.reply("⚡ 🎲 Запуск генерации из случайного источника (PubMed / РосЖурналы / YouTube / Рецепты / Мифы) без картинки...")
+    success, res = await generate_and_publish_post(with_image=False, source_mode="random")
+    await message.reply("✅ " + res if success else "❌ " + res)
+
+@dp.message(Command("test_pubmed"))
+async def cmd_test_pubmed(message: types.Message):
+    await message.reply("⚡ Ищу свежее клиническое исследование в PubMed (без картинки)...")
+    success, res = await generate_and_publish_post(RUBRIC_ACADEMIC_SCIENCE, with_image=False)
+    await message.reply("✅ " + res if success else "❌ " + res)
+
 @dp.message(Command("test_recipe"))
 async def cmd_test_rec(message: types.Message):
     await message.reply("⚡ Ищу реальный рецепт из первоисточников без арта...")
@@ -1072,12 +1128,6 @@ async def cmd_test_ru(message: types.Message):
 async def cmd_test_yt(message: types.Message):
     await message.reply("⚡ Забираю реальное видео эксперта через RSS (без арта)...")
     success, res = await generate_and_publish_post(RUBRIC_YOUTUBE, with_image=False)
-    await message.reply("✅ " + res if success else "❌ " + res)
-
-@dp.message(Command("test_text"))
-async def cmd_test_text(message: types.Message):
-    await message.reply("⚡ Gemini 3.7 генерирует тестовый пост по расписанию...")
-    success, res = await generate_and_publish_post(with_image=False)
     await message.reply("✅ " + res if success else "❌ " + res)
 
 @dp.message(Command("test_myth"))
