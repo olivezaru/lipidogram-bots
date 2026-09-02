@@ -59,7 +59,6 @@ SPAM_LINKS_PATTERN = re.compile(
     re.IGNORECASE
 )
 
-# Официальные YouTube каналы с прямыми Channel ID для RSS ленты (без блокировок со стороны YouTube)
 YOUTUBE_CHANNELS_RSS = [
     {"name": "Dr. Peter Attia", "channel_id": "UCF_fDSgblvyC-hltP1t4gTg", "expert": "Питер Аттия (эксперт по липидологии и превентивной кардиологии)"},
     {"name": "Huberman Lab", "channel_id": "UC2D2CMWXMOVWx7giW1n3LIg", "expert": "Эндрю Хуберман (нейробиолог Стэнфордского университета)"},
@@ -71,7 +70,6 @@ YOUTUBE_CHANNELS_RSS = [
     {"name": "СМТ — Научный подход", "channel_id": "UCi1p7P6-O3sV3h98rW2g6mA", "expert": "Борис Цацулин (научно-популярный аналитик)"}
 ]
 
-# Темы поиска реальных исследований на PubMed и Europe PMC
 PUBMED_SEARCH_TOPICS = [
     {
         "query": '("LDL-C" OR "ApoB" OR "triglycerides") AND ("dietary intervention" OR "Mediterranean diet" OR "fiber") AND ("clinical trial" OR "meta-analysis")',
@@ -165,6 +163,26 @@ async def generate_kie_text_and_prompt(user_prompt: str) -> tuple[str, str]:
         "Content-Type": "application/json"
     }
 
+    # 1. Формат OpenAI-совместимого чата KIE.ai
+    openai_payload_1 = {
+        "model": "gemini-3.7-flash",
+        "messages": [
+            {"role": "system", "content": f"{SYSTEM_PROMPT}\n\nВерни ТОЛЬКО валидный JSON с ключами post_text и image_prompt."},
+            {"role": "user", "content": user_prompt}
+        ],
+        "temperature": 0.7
+    }
+
+    openai_payload_2 = {
+        "model": "google/gemini-3.7-flash",
+        "messages": [
+            {"role": "system", "content": f"{SYSTEM_PROMPT}\n\nВерни ТОЛЬКО валидный JSON с ключами post_text и image_prompt."},
+            {"role": "user", "content": user_prompt}
+        ],
+        "temperature": 0.7
+    }
+
+    # 2. Формат Google REST Gemini
     gemini_payload = {
         "contents": [
             {
@@ -179,20 +197,14 @@ async def generate_kie_text_and_prompt(user_prompt: str) -> tuple[str, str]:
         }
     }
 
-    openai_payload = {
-        "model": "gemini-3.7-flash",
-        "messages": [
-            {"role": "system", "content": f"{SYSTEM_PROMPT}\n\nВерни ТОЛЬКО валидный JSON с ключами post_text и image_prompt."},
-            {"role": "user", "content": user_prompt}
-        ],
-        "temperature": 0.7
-    }
-
     endpoints = [
-        ("gemini_native", f"https://api.kie.ai/gemini/v1beta/models/gemini-3.7-flash:generateContent?key={KIE_KEY}", gemini_payload),
-        ("gemini_native", f"https://api.kie.ai/gemini/v1/models/gemini-3.7-flash:generateContent?key={KIE_KEY}", gemini_payload),
-        ("chat_completions", "https://api.kie.ai/api/v1/chat/completions", openai_payload),
-        ("chat_completions", "https://api.kie.ai/v1/chat/completions", openai_payload)
+        # Основной чат-эндпоинт KIE.ai
+        ("chat_completions", "https://api.kie.ai/v1/chat/completions", openai_payload_1),
+        ("chat_completions", "https://api.kie.ai/api/v1/chat/completions", openai_payload_1),
+        ("chat_completions", "https://api.kie.ai/v1/chat/completions", openai_payload_2),
+        # Gemini REST пути KIE.ai
+        ("gemini_native", f"https://api.kie.ai/gemini-3.7-flash/v1beta/models/gemini-3.7-flash:generateContent?key={KIE_KEY}", gemini_payload),
+        ("gemini_native", f"https://api.kie.ai/gemini/v1/models/gemini-3.7-flash:generateContent?key={KIE_KEY}", gemini_payload)
     ]
 
     last_error = ""
@@ -200,14 +212,22 @@ async def generate_kie_text_and_prompt(user_prompt: str) -> tuple[str, str]:
         for retry in range(1, 3):
             for mode, target_url, payload in endpoints:
                 try:
-                    async with session.post(target_url, headers=headers, json=payload, timeout=aiohttp.ClientTimeout(total=45)) as resp:
+                    logging.info(f"Запрос в KIE.ai: {target_url[:45]}...")
+                    async with session.post(target_url, headers=headers, json=payload, timeout=aiohttp.ClientTimeout(total=40)) as resp:
                         if resp.status == 200:
                             raw_json = await resp.json()
-                            if isinstance(raw_json, dict) and (raw_json.get("code") in [500, 400, 401, 403] or "Server exception" in str(raw_json)):
-                                last_error = f"KIE error: {raw_json.get('msg', 'Server exception')}"
+                            if isinstance(raw_json, dict) and (raw_json.get("code") in [500, 400, 401, 403, 404] or "Server exception" in str(raw_json) or "The page does not exist" in str(raw_json)):
+                                last_error = f"KIE error: {raw_json.get('msg', 'API Error')}"
                                 continue
 
-                            if mode == "gemini_native":
+                            if mode == "chat_completions":
+                                choices = raw_json.get("choices", [])
+                                if choices:
+                                    content = choices[0].get("message", {}).get("content", "")
+                                    post_t, img_p = parse_model_json(content)
+                                    if post_t:
+                                        return post_t, img_p
+                            elif mode == "gemini_native":
                                 candidates = raw_json.get("candidates", []) if isinstance(raw_json, dict) else []
                                 if candidates:
                                     parts = candidates[0].get("content", {}).get("parts", [])
@@ -215,16 +235,9 @@ async def generate_kie_text_and_prompt(user_prompt: str) -> tuple[str, str]:
                                         post_t, img_p = parse_model_json(parts[0].get("text", ""))
                                         if post_t:
                                             return post_t, img_p
-                            elif mode == "chat_completions":
-                                choices = raw_json.get("choices", [])
-                                if choices:
-                                    content = choices[0].get("message", {}).get("content", "")
-                                    post_t, img_p = parse_model_json(content)
-                                    if post_t:
-                                        return post_t, img_p
                         else:
                             text_err = await resp.text()
-                            last_error = f"HTTP {resp.status}: {text_err[:100]}"
+                            last_error = f"HTTP {resp.status}: {text_err[:90]}"
                 except Exception as e:
                     last_error = str(e)
                     continue
@@ -329,7 +342,6 @@ async def generate_kie_image_bytes(image_prompt: str) -> bytes:
 
     return None
 
-# --- ИСТОЧНИК 1: YouTube через официальные RSS-фиды каналов (без капчи и блокировок) ---
 async def fetch_real_youtube_video() -> dict:
     selected_channel = random.choice(YOUTUBE_CHANNELS_RSS)
     rss_url = f"https://www.youtube.com/feeds/videos.xml?channel_id={selected_channel['channel_id']}"
@@ -353,7 +365,6 @@ async def fetch_real_youtube_video() -> dict:
                         desc_elem = entry.find(".//media:description", ns)
                         description = desc_elem.text if desc_elem is not None else ""
 
-                        # Пытаемся получить реальный транскрипт видео
                         transcript_text = ""
                         try:
                             t_list = YouTubeTranscriptApi.get_transcript(video_id, languages=['en', 'ru', 'en-US'])
@@ -375,10 +386,8 @@ async def fetch_real_youtube_video() -> dict:
     except Exception as e:
         logging.warning(f"Ошибка парсинга YouTube RSS: {e}")
 
-    # Резервный поиск по PubMed кардиологического видео-доклада
     return await fetch_pubmed_study('("Cardiovascular" OR "Atherosclerosis") AND ("Clinical Review" OR "Lecture")')
 
-# --- ИСТОЧНИК 2: PubMed / NCBI с полным абстрактом ---
 async def fetch_pubmed_study(custom_query: str = None) -> dict:
     if custom_query:
         query = custom_query
@@ -432,7 +441,6 @@ async def fetch_pubmed_study(custom_query: str = None) -> dict:
 
     return None
 
-# --- ИСТОЧНИК 3: Российское кардиологическое общество (РКО) ---
 async def fetch_rko_news() -> dict:
     base_section_url = "https://scardio.ru/news/novosti_obschestva/"
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
@@ -475,7 +483,6 @@ async def fetch_rko_news() -> dict:
     except Exception as e:
         logging.warning(f"Ошибка РКО: {e}")
 
-    # Если сайт РКО недоступен, берем рецензируемую статью по кардиологии из PubMed
     return await fetch_pubmed_study('("Russian" OR "guidelines" OR "cardiology") AND ("dyslipidemia" OR "atherosclerosis")')
 
 def sanitize_html_for_telegram(text: str) -> str:
@@ -536,7 +543,6 @@ async def generate_and_publish_post(mode: str = "auto", with_image: bool = True)
         category = "💡 РАЗБОР МИФОВ ДОКАЗАТЕЛЬНОЙ МЕДИЦИНОЙ"
         hashtags = "#Мифы_Липидограм #Доказательно #Холестерин"
     else:
-        # Авто-ротация случайной свежей темы
         modes = ["youtube", "recipe", "science", "myth", "pubmed_random"]
         chosen = random.choice(modes)
         return await generate_and_publish_post(mode=chosen, with_image=with_image)
@@ -568,7 +574,6 @@ async def generate_and_publish_post(mode: str = "auto", with_image: bool = True)
 
     clean_html = sanitize_html_for_telegram(post_text)
 
-    # Безопасная отправка с защитой от Flood Control
     try:
         if img_bytes and len(img_bytes) > 2000:
             photo_file = BufferedInputFile(img_bytes, filename="lipidogram_art.jpg")
