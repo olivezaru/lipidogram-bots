@@ -37,6 +37,9 @@ EMAIL_HOST = os.getenv("EMAIL_HOST", "imap.gmail.com").strip()
 EMAIL_USER = os.getenv("EMAIL_USER", "").strip()
 EMAIL_PASS = os.getenv("EMAIL_PASS", "").strip()
 
+HISTORY_FILE = "published_history.json"
+MAX_HISTORY_SIZE = 300
+
 if not MODERATOR_TOKEN:
     logging.error("КРИТИЧЕСКАЯ ОШИБКА: MODERATOR_BOT_TOKEN не задан!")
 
@@ -58,6 +61,40 @@ SPAM_LINKS_PATTERN = re.compile(
     r'(https?://\S+|t\.me/\S+|telegram\.me/\S+|@[a-zA-Z0-9_]{5,})',
     re.IGNORECASE
 )
+
+def load_history() -> set:
+    if os.path.exists(HISTORY_FILE):
+        try:
+            with open(HISTORY_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, list):
+                    return set(data)
+        except Exception as e:
+            logging.warning(f"Не удалось прочитать {HISTORY_FILE}: {e}")
+    return set()
+
+def save_history(history_set: set):
+    try:
+        items = list(history_set)[-MAX_HISTORY_SIZE:]
+        with open(HISTORY_FILE, "w", encoding="utf-8") as f:
+            json.dump(items, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logging.warning(f"Не удалось сохранить {HISTORY_FILE}: {e}")
+
+published_history = load_history()
+
+def is_already_published(item_id_or_url: str) -> bool:
+    if not item_id_or_url:
+        return False
+    clean = str(item_id_or_url).strip().lower()
+    return clean in published_history
+
+def mark_as_published(item_id_or_url: str):
+    if not item_id_or_url:
+        return
+    clean = str(item_id_or_url).strip().lower()
+    published_history.add(clean)
+    save_history(published_history)
 
 # 1. Российские научно-популярные и медицинские журналы с открытыми RSS
 RU_JOURNALS_RSS = [
@@ -363,28 +400,32 @@ async def generate_kie_image_bytes(image_prompt: str) -> bytes:
 
     return None
 
-# ПОИСК РЕАЛЬНЫХ ДОКАЗАТЕЛЬНЫХ РЕЦЕПТОВ ИЗ ИСТОЧНИКОВ (AHA / PubMed / Зожник)
+# ПОИСК РЕАЛЬНЫХ ДОКАЗАТЕЛЬНЫХ РЕЦЕПТОВ (С ФИЛЬТРОМ ИСТОРИИ)
 def fetch_real_cardio_recipe() -> dict:
     try:
         headers = {"User-Agent": "Mozilla/5.0"}
-        # 1. Пробуем найти свежий рецепт в доказательном журнале Зожник
         z_resp = requests.get("https://zozhnik.ru/category/eda/recepty/feed", headers=headers, timeout=8)
         if z_resp.status_code == 200:
             root = ET.fromstring(z_resp.content)
             items = root.findall(".//item")
             if items:
                 random.shuffle(items)
-                for it in items[:6]:
+                for it in items:
                     title_elem = it.find("title")
                     link_elem = it.find("link")
                     desc_elem = it.find("description")
                     if title_elem is not None and link_elem is not None:
                         t = title_elem.text or ""
                         l = link_elem.text or ""
+                        
+                        if is_already_published(l):
+                            continue
+
                         d = desc_elem.text if desc_elem is not None else ""
                         clean_d = BeautifulSoup(d, "html.parser").get_text(separator=" ", strip=True)
                         if any(kw in f"{t} {clean_d}".lower() for kw in ["рыб", "овсян", "чечевиц", "нут", "фасол", "авокадо", "салат", "оливк", "семен", "овощ", "клетчатк"]):
                             return {
+                                "id": l,
                                 "title": t,
                                 "journal": "Журнал доказательного питания «Зожник»",
                                 "content": f"Рецепт: {t}\nОписание и ингредиенты:\n{clean_d[:2500]}",
@@ -393,24 +434,27 @@ def fetch_real_cardio_recipe() -> dict:
     except Exception as e:
         logging.warning(f"Ошибка парсинга рецептов Зожника: {e}")
 
-    # 2. Поиск клинических диетологических исследований на PubMed
     query = '("Mediterranean diet" OR "Portfolio diet" OR "Oat beta-glucan" OR "Legumes" OR "Walnuts" OR "Flaxseed") AND ("LDL cholesterol" OR "lipid lowering") AND ("recipe" OR "dietary intervention" OR "trial")'
     study = fetch_pubmed_study_with_abstract(query)
     if study:
         return {
+            "id": study.get("pmid", study["url"]),
             "title": f"Кардиопротективный рацион: {study['title']}",
             "journal": f"PubMed / {study['journal']}",
             "content": f"Исследование: {study['title']}\nДанные по продуктам и нутриентам:\n{study['abstract']}",
             "url": study['url']
         }
 
+    fallback_url = "https://scardio.ru/news/novosti_obschestva/"
     return {
+        "id": fallback_url,
         "title": "Средиземноморский салат с чечевицей, авокадо и льняной заправкой",
         "journal": "Клинические рекомендации по гиполипидемической диете (ESC / AHA Guidelines)",
         "content": "Ингредиенты: отварная зеленая чечевица (богата растворимой клетчаткой), спелый авокадо (мононенасыщенные жиры), свежий шпинат, оливковое масло первого отжима Extra Virgin, семена льна. Содержание насыщенных жиров менее 1.5г.",
-        "url": "https://scardio.ru/news/novosti_obschestva/"
+        "url": fallback_url
     }
 
+# ПАРСИНГ РОССИЙСКИХ НАУЧНЫХ ЖУРНАЛОВ (С ФИЛЬТРОМ ИСТОРИИ)
 def fetch_russian_journals_rss() -> dict:
     journals = list(RU_JOURNALS_RSS)
     random.shuffle(journals)
@@ -437,8 +481,11 @@ def fetch_russian_journals_rss() -> dict:
 
                     title = title_elem.text or ""
                     link = link_elem.text if link_elem.text else link_elem.attrib.get("href", "")
-                    raw_desc = desc_elem.text if desc_elem is not None and desc_elem.text else ""
+                    
+                    if is_already_published(link):
+                        continue
 
+                    raw_desc = desc_elem.text if desc_elem is not None and desc_elem.text else ""
                     clean_desc = BeautifulSoup(raw_desc, "html.parser").get_text(separator=" ", strip=True)
                     combined = f"{title} {clean_desc}".lower()
 
@@ -455,6 +502,7 @@ def fetch_russian_journals_rss() -> dict:
                             pass
 
                         return {
+                            "id": link,
                             "title": title,
                             "journal": j["name"],
                             "category": j["category"],
@@ -468,6 +516,7 @@ def fetch_russian_journals_rss() -> dict:
 
     return fetch_rko_news()
 
+# ФИЛЬТРАЦИЯ ВИДЕО (БЕЗ АНОНСОВ И БЕЗ ПОВТОРОВ ИЗ ИСТОРИИ)
 def fetch_global_youtube_video() -> dict:
     if random.random() < 0.75:
         primary_pool = list(RU_HEALTH_CHANNELS)
@@ -479,6 +528,11 @@ def fetch_global_youtube_video() -> dict:
     random.shuffle(primary_pool)
     random.shuffle(secondary_pool)
     all_channels = primary_pool + secondary_pool
+
+    UPCOMING_STOP_WORDS = [
+        "трансляция начнется", "премьера через", "прямой эфир начнется", "вебинар состоится",
+        "live in", "scheduled for", "upcoming", "premieres in", "скоро начнется", "анонс вебинара"
+    ]
 
     for channel in all_channels:
         try:
@@ -506,6 +560,8 @@ def fetch_global_youtube_video() -> dict:
                 if not entries:
                     continue
 
+                random.shuffle(entries)
+
                 for entry in entries:
                     vid_elem = entry.find("yt:videoId", ns)
                     title_elem = entry.find("atom:title", ns)
@@ -515,30 +571,43 @@ def fetch_global_youtube_video() -> dict:
 
                     vid = vid_elem.text
                     title = title_elem.text
+                    video_direct_url = f"https://www.youtube.com/watch?v={vid}"
+
+                    # Проверяем историю публикаций
+                    if is_already_published(vid) or is_already_published(video_direct_url):
+                        continue
 
                     desc_elem = entry.find(".//media:description", ns)
                     description = desc_elem.text if desc_elem is not None else ""
 
-                    is_rko = "scardio" in channel.get("name", "").lower() or "scardioru" in handle.lower()
                     combined_text = f"{title} {description}".lower()
-                    
+
+                    if any(stop_w in combined_text for stop_w in UPCOMING_STOP_WORDS):
+                        continue
+
+                    is_rko = "scardio" in channel.get("name", "").lower() or "scardioru" in handle.lower()
                     if not is_rko and not any(kw in combined_text for kw in HEALTH_KEYWORDS):
                         continue
 
                     transcript_text = ""
+                    has_real_transcript = False
                     try:
                         transcript_list = YouTubeTranscriptApi.get_transcript(vid, languages=['ru', 'en', 'en-US'])
-                        transcript_text = " ".join([t['text'] for t in transcript_list[:140]])
+                        if transcript_list:
+                            transcript_text = " ".join([t['text'] for t in transcript_list[:140]])
+                            has_real_transcript = True
                     except Exception:
                         transcript_text = description
 
+                    if not has_real_transcript and len(description.strip()) < 120:
+                        continue
+
                     content_for_prompt = f"Название видео: {title}\nКанал: {channel['name']}\n\nТекст / Описание видео:\n{transcript_text[:3000]}"
                     
-                    if len(transcript_text) > 40:
+                    if len(transcript_text) > 80:
                         yt_img = f"https://img.youtube.com/vi/{vid}/hqdefault.jpg"
-                        video_direct_url = f"https://www.youtube.com/watch?v={vid}"
-                        
                         return {
+                            "id": vid,
                             "title": title,
                             "journal": channel['name'],
                             "content": content_for_prompt,
@@ -605,12 +674,17 @@ def fetch_rko_from_email() -> dict:
         mail.store(latest_id, '+FLAGS', '\\Seen')
         mail.logout()
 
+        target_url = found_links[0] if found_links else "https://scardio.ru/news/novosti_obschestva/"
+        if is_already_published(target_url):
+            return None
+
         return {
+            "id": target_url,
             "title": subject,
             "journal": "Официальная рассылка Российского кардиологического общества (РКО)",
             "year": "2025-2026",
             "content": body[:2500],
-            "url": found_links[0] if found_links else "https://scardio.ru/news/novosti_obschestva/"
+            "url": target_url
         }
     except Exception as e:
         logging.warning(f"Ошибка проверки почты РКО: {e}")
@@ -634,7 +708,8 @@ def fetch_rko_news() -> dict:
                 title = a.get_text(strip=True)
                 if "/news/novosti_obschestva/" in href and len(title) > 20 and href != "/news/novosti_obschestva/":
                     full_url = f"https://scardio.ru{href}" if href.startswith("/") else href
-                    valid_news.append({"title": title, "url": full_url})
+                    if not is_already_published(full_url):
+                        valid_news.append({"title": title, "url": full_url})
             
             if valid_news:
                 selected = random.choice(valid_news[:10])
@@ -650,6 +725,7 @@ def fetch_rko_news() -> dict:
                     pass
 
                 return {
+                    "id": selected["url"],
                     "title": selected["title"],
                     "journal": "Российское кардиологическое общество (РКО)",
                     "year": "2025-2026",
@@ -661,9 +737,10 @@ def fetch_rko_news() -> dict:
 
     return fetch_pubmed_study_with_abstract('("Russian" OR "guidelines") AND ("cardiology" OR "dyslipidemia")')
 
+# ПОИСК PUBMED С ФИЛЬТРОМ ИСТОРИИ
 def fetch_pubmed_study_with_abstract(query: str) -> dict:
     try:
-        search_url = f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&term={urllib.parse.quote(query)}&mindate=2023/01/01&maxdate=2026/12/31&retmax=15&sort=pub_date&retmode=json"
+        search_url = f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&term={urllib.parse.quote(query)}&mindate=2023/01/01&maxdate=2026/12/31&retmax=25&sort=pub_date&retmode=json"
         headers = {"User-Agent": "Mozilla/5.0"}
         res = requests.get(search_url, headers=headers, timeout=8)
         if res.status_code == 200:
@@ -672,7 +749,10 @@ def fetch_pubmed_study_with_abstract(query: str) -> dict:
 
             if id_list:
                 random.shuffle(id_list)
-                for pmid in id_list[:5]:
+                for pmid in id_list:
+                    if is_already_published(f"pmid_{pmid}"):
+                        continue
+
                     fetch_url = f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=pubmed&id={pmid}&retmode=xml"
                     xml_res = requests.get(fetch_url, headers=headers, timeout=8)
                     if xml_res.status_code == 200:
@@ -699,6 +779,7 @@ def fetch_pubmed_study_with_abstract(query: str) -> dict:
                             continue
 
                         return {
+                            "id": f"pmid_{pmid}",
                             "pmid": pmid,
                             "title": title,
                             "journal": journal,
@@ -734,16 +815,13 @@ def sanitize_html_for_telegram(text: str) -> str:
         text = text.replace(key, val)
     return text
 
-# ДИНАМИЧЕСКОЕ РАСПИСАНИЕ, МЕНЯЮЩЕЕСЯ КАЖДУЮ НОВУЮ НЕДЕЛЮ ГОДА
 def pick_rubric_by_schedule() -> dict:
     now = datetime.now()
     week_number = now.isocalendar().week
-    weekday = now.weekday()  # 0: Пн, 6: Вс
+    weekday = now.weekday()
     hour = now.hour
 
-    # Чередуем две разные матрицы расписания для четных и нечетных недель
     if week_number % 2 == 1:
-        # Нечетная неделя
         if hour < 14:
             morning_plan = [RUBRIC_ACADEMIC_SCIENCE, RUBRIC_YOUTUBE, RUBRIC_RU_JOURNALS, RUBRIC_YOUTUBE, RUBRIC_ACADEMIC_SCIENCE, RUBRIC_SPORT, RUBRIC_YOUTUBE]
             return morning_plan[weekday % len(morning_plan)]
@@ -751,7 +829,6 @@ def pick_rubric_by_schedule() -> dict:
             evening_plan = [RUBRIC_RECIPES, RUBRIC_MYTHS, RUBRIC_SPORT, RUBRIC_MYTHS, RUBRIC_RECIPES, RUBRIC_MYTHS, RUBRIC_RECIPES]
             return evening_plan[weekday % len(evening_plan)]
     else:
-        # Четная неделя (другой порядок тем)
         if hour < 14:
             morning_plan = [RUBRIC_RU_JOURNALS, RUBRIC_ACADEMIC_SCIENCE, RUBRIC_YOUTUBE, RUBRIC_RU_JOURNALS, RUBRIC_SPORT, RUBRIC_YOUTUBE, RUBRIC_ACADEMIC_SCIENCE]
             return morning_plan[weekday % len(morning_plan)]
@@ -773,9 +850,11 @@ async def generate_and_publish_post(custom_rubric: dict = None, with_image: bool
     rubric = custom_rubric or pick_rubric_by_schedule()
     style = rubric.get("style_type", "expert_review")
     img_bytes = None
+    study_id = None
 
     if source_mode == "ru_journals" or rubric.get("source_type") == "ru_journals":
         study = fetch_russian_journals_rss()
+        study_id = study.get("id") or study.get("url")
         category = study.get("category", "🔬 РОССИЙСКАЯ ДОКАЗАТЕЛЬНАЯ МЕДИЦИНА")
         hashtags = study.get("hashtags", rubric['hashtags'])
         prompt = (
@@ -786,6 +865,7 @@ async def generate_and_publish_post(custom_rubric: dict = None, with_image: bool
         )
     elif rubric.get("source_type") == "recipe_source":
         study = fetch_real_cardio_recipe()
+        study_id = study.get("id") or study.get("url")
         prompt = (
             f"Напиши карточку полезного блюда в стиле «{style}» для Telegram-канала «Липидограм» в рубрику «{rubric['category']}».\n"
             f"РЕАЛЬНЫЙ РЕЦЕПТ ИЗ ИСТОЧНИКА:\n{study.get('content', '')}\n\n"
@@ -794,6 +874,7 @@ async def generate_and_publish_post(custom_rubric: dict = None, with_image: bool
         )
     elif rubric.get("source_type") == "youtube":
         study = fetch_global_youtube_video()
+        study_id = study.get("id") or study.get("url")
         if with_image and study.get("image_url"):
             try:
                 async with aiohttp.ClientSession() as yt_s:
@@ -811,6 +892,7 @@ async def generate_and_publish_post(custom_rubric: dict = None, with_image: bool
         )
     elif rubric.get("source_type") == "rko":
         study = fetch_rko_news()
+        study_id = study.get("id") or study.get("url")
         prompt = (
             f"Напиши понятный и актуальный пост в стиле «{style}» для Telegram-канала «Липидограм» в рубрику «{rubric['category']}».\n"
             f"МАТЕРИАЛ ПЕРВОИСТОЧНИКА:\n{study.get('content', '')}\n\n"
@@ -820,6 +902,7 @@ async def generate_and_publish_post(custom_rubric: dict = None, with_image: bool
     else:
         study = fetch_pubmed_study_with_abstract(rubric['query'])
         if study:
+            study_id = study.get("id") or study.get("pmid")
             prompt = (
                 f"Напиши пост в стиле «{style}» для Telegram-канала «Липидограм» в рубрику «{rubric['category']}».\n"
                 f"Тема: {rubric['ru_theme']}\n\n"
@@ -861,6 +944,9 @@ async def generate_and_publish_post(custom_rubric: dict = None, with_image: bool
                     parse_mode="HTML",
                     disable_web_page_preview=False
                 )
+            
+            if study_id:
+                mark_as_published(study_id)
             logging.info(f"Пост с фото опубликован! ID: {sent_msg.message_id}")
             return True, f"Опубликован пост («{rubric['category']}») с иллюстрацией Nano Banana!"
 
@@ -870,6 +956,8 @@ async def generate_and_publish_post(custom_rubric: dict = None, with_image: bool
             parse_mode="HTML",
             disable_web_page_preview=False
         )
+        if study_id:
+            mark_as_published(study_id)
         return True, f"Опубликован пост («{rubric['category']}») без фото."
     except Exception as e:
         return False, f"Ошибка отправки в Telegram: {e}"
@@ -885,10 +973,10 @@ async def cmd_start(message: types.Message):
         "• /post_youtube — видеовыжимка (РКО, Утин, Attia)\n"
         "• /post_myth — разбор мифа с фото\n\n"
         "<b>🧪 Тестовые команды БЕЗ картинки (0 кредитов, мгновенно):</b>\n"
+        "• /test_text — случайный пост из всех рубрик\n"
         "• /test_recipe — проверка реального рецепта\n"
-        "• /test_ru — проверка российских журналов (Биомолекула, Зожник)\n"
+        "• /test_ru — проверка российских журналов\n"
         "• /test_youtube — проверка реального YouTube видео\n"
-        "• /test_text — случайный пост (только текст)\n"
         "• /test_myth — проверка мифа",
         parse_mode="HTML"
     )
