@@ -275,9 +275,6 @@ async def generate_kie_image_bytes(image_prompt: str) -> bytes:
 
                 res_data = await resp.json()
 
-            logging.info(f"Ответ createTask от KIE: {res_data}")
-
-            # Проверяем, отдана ли картинка сразу
             immediate_urls = extract_all_urls_from_any_json(res_data)
             if immediate_urls:
                 img_url = immediate_urls[0]
@@ -299,7 +296,6 @@ async def generate_kie_image_bytes(image_prompt: str) -> bytes:
 
             logging.info(f"Задача создана (TaskId: {task_id}). Ожидание генерации Nano Banana (до 100 сек)...")
 
-            # Список эндпоинтов для опроса статуса задачи
             status_urls = [
                 f"https://api.kie.ai/api/v1/jobs/recordInfo?taskId={task_id}",
                 f"https://api.kie.ai/api/v1/jobs/getTask?taskId={task_id}",
@@ -307,7 +303,6 @@ async def generate_kie_image_bytes(image_prompt: str) -> bytes:
                 f"https://api.kie.ai/api/v1/jobs/record/{task_id}"
             ]
 
-            # 25 циклов по 4 секунды = 100 секунд
             for attempt in range(1, 26):
                 await asyncio.sleep(4)
                 for s_url in status_urls:
@@ -316,7 +311,6 @@ async def generate_kie_image_bytes(image_prompt: str) -> bytes:
                             if s_resp.status == 200:
                                 s_data = await s_resp.json()
                                 
-                                # Ищем ссылки в ответе
                                 urls_in_status = extract_all_urls_from_any_json(s_data)
                                 if urls_in_status:
                                     final_img_url = urls_in_status[0]
@@ -328,7 +322,6 @@ async def generate_kie_image_bytes(image_prompt: str) -> bytes:
                                                 logging.info(f"Картинка успешно скачана! Размер: {len(b_data)} байт")
                                                 return b_data
 
-                                # Логируем текущий статус
                                 result_data = s_data.get("data", {}) if isinstance(s_data.get("data"), dict) else s_data
                                 state = str(result_data.get("state") or result_data.get("status") or s_data.get("status") or "").lower()
                                 logging.info(f"Статус Nano Banana (шаг {attempt}/25): {state}")
@@ -598,7 +591,7 @@ def pick_rubric_by_schedule() -> dict:
     else:
         return RUBRIC_MYTHS
 
-async def generate_and_publish_post(custom_rubric: dict = None) -> tuple[bool, str]:
+async def generate_and_publish_post(custom_rubric: dict = None, with_image: bool = True) -> tuple[bool, str]:
     if not KIE_KEY:
         err = "KIE_API_KEY не установлен в переменных окружения!"
         logging.error(err)
@@ -611,13 +604,13 @@ async def generate_and_publish_post(custom_rubric: dict = None) -> tuple[bool, s
 
     rubric = custom_rubric or pick_rubric_by_schedule()
     style = rubric.get("style_type", "expert_review")
-    logging.info(f"Запуск рубрики: {rubric['category']} (стиль: {style})")
+    logging.info(f"Запуск рубрики: {rubric['category']} (стиль: {style}, генерация арта: {with_image})")
 
     img_bytes = None
 
     if rubric.get("source_type") == "youtube":
         study = fetch_global_youtube_video()
-        if study.get("image_url"):
+        if with_image and study.get("image_url"):
             try:
                 async with aiohttp.ClientSession() as yt_s:
                     async with yt_s.get(study["image_url"], timeout=aiohttp.ClientTimeout(total=10)) as yt_r:
@@ -665,7 +658,7 @@ async def generate_and_publish_post(custom_rubric: dict = None) -> tuple[bool, s
     except Exception as e:
         return False, f"Ошибка генерации текста: {e}"
 
-    if not img_bytes and image_prompt:
+    if with_image and not img_bytes and image_prompt:
         img_bytes = await generate_kie_image_bytes(image_prompt)
 
     try:
@@ -690,7 +683,7 @@ async def generate_and_publish_post(custom_rubric: dict = None) -> tuple[bool, s
                     disable_web_page_preview=False
                 )
             logging.info(f"Пост с фото опубликован! ID: {sent_msg.message_id}")
-            return True, f"Опубликован пост («{rubric['category']}») с артом Nano Banana!"
+            return True, f"Опубликован пост («{rubric['category']}») с иллюстрацией Nano Banana!"
 
         sent_msg = await bot_poster.send_message(
             chat_id=CHANNEL_ID,
@@ -698,45 +691,82 @@ async def generate_and_publish_post(custom_rubric: dict = None) -> tuple[bool, s
             parse_mode="HTML",
             disable_web_page_preview=False
         )
-        return True, f"Опубликован текстовый пост рубрики «{rubric['category']}»."
+        return True, f"Опубликован пост (только текст Gemini 3.7) в рубрике «{rubric['category']}»."
     except Exception as e:
         return False, f"Ошибка отправки в Telegram: {e}"
 
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     await message.reply(
-        "🫀 Медиа-бот «Липидограм» подключен к вашим моделям KIE.ai!\n\n"
-        "• 🚀 Текст: Gemini 3.7 Flash.\n"
-        "• 🍌 Арт: Nano Banana 2 Lite.\n\n"
-        "Команды:\n"
-        "• /post_now — публикация по расписанию.\n"
-        "• /post_youtube — видеовыжимка мировых экспертов.\n"
-        "• /post_recipe — кулинарная карточка.\n"
-        "• /post_myth — разбор мифа."
+        "🫀 <b>Медиа-бот «Липидограм»</b>\n\n"
+        "<b>Команды с генерацией арта (Nano Banana 2 Lite + Gemini 3.7):</b>\n"
+        "• /post_now — публикация по текущему расписанию с фото\n"
+        "• /post_youtube — видеовыжимка мировых экспертов\n"
+        "• /post_recipe — кулинарная карточка с фото\n"
+        "• /post_myth — разбор мифа с фото\n\n"
+        "<b>🧪 Тестовые команды БЕЗ картинки (только Gemini 3.7, 0 кредитов арта):</b>\n"
+        "• /test_text — быстрый пост по расписанию (только текст)\n"
+        "• /test_youtube — проверка выжимки YouTube\n"
+        "• /test_recipe — проверка рецепта (только текст)\n"
+        "• /test_myth — проверка мифа (только текст)\n"
+        "• /test_science — научный дайджест РКО / PubMed",
+        parse_mode="HTML"
     )
 
+# --- Команды с полной генерацией арта ---
 @dp.message(Command("post_now"))
 async def cmd_post_now(message: types.Message):
     await message.reply("⏳ Gemini 3.7 формирует пост, а Nano Banana 2 Lite создает арт (ожидание до 60-90 сек)...")
-    success, res = await generate_and_publish_post()
+    success, res = await generate_and_publish_post(with_image=True)
     await message.reply("✅ " + res if success else "❌ " + res)
 
 @dp.message(Command("post_youtube"))
 async def cmd_post_yt(message: types.Message):
     await message.reply("🎬 Забираю видео и формирую выжимку...")
-    success, res = await generate_and_publish_post(RUBRIC_YOUTUBE)
+    success, res = await generate_and_publish_post(RUBRIC_YOUTUBE, with_image=True)
     await message.reply("✅ " + res if success else "❌ " + res)
 
 @dp.message(Command("post_recipe"))
 async def cmd_post_rec(message: types.Message):
     await message.reply("🥗 Nano Banana 2 Lite генерирует фото блюда и рецепт (ожидание до 60-90 сек)...")
-    success, res = await generate_and_publish_post(RUBRIC_RECIPES)
+    success, res = await generate_and_publish_post(RUBRIC_RECIPES, with_image=True)
     await message.reply("✅ " + res if success else "❌ " + res)
 
 @dp.message(Command("post_myth"))
 async def cmd_post_my(message: types.Message):
     await message.reply("💡 Gemini 3.7 развенчивает миф, Nano Banana генерирует арт...")
-    success, res = await generate_and_publish_post(RUBRIC_MYTHS)
+    success, res = await generate_and_publish_post(RUBRIC_MYTHS, with_image=True)
+    await message.reply("✅ " + res if success else "❌ " + res)
+
+# --- Тестовые команды БЕЗ генерации картинки (быстро, 0 кредитов) ---
+@dp.message(Command("test_text"))
+async def cmd_test_text(message: types.Message):
+    await message.reply("⚡ Gemini 3.7 генерирует тестовый пост без картинки...")
+    success, res = await generate_and_publish_post(with_image=False)
+    await message.reply("✅ " + res if success else "❌ " + res)
+
+@dp.message(Command("test_youtube"))
+async def cmd_test_yt(message: types.Message):
+    await message.reply("⚡ Забираю YouTube-транскрипт и генерирую выжимку (без арта)...")
+    success, res = await generate_and_publish_post(RUBRIC_YOUTUBE, with_image=False)
+    await message.reply("✅ " + res if success else "❌ " + res)
+
+@dp.message(Command("test_recipe"))
+async def cmd_test_rec(message: types.Message):
+    await message.reply("⚡ Генерирую рецепт через Gemini 3.7 (без арта)...")
+    success, res = await generate_and_publish_post(RUBRIC_RECIPES, with_image=False)
+    await message.reply("✅ " + res if success else "❌ " + res)
+
+@dp.message(Command("test_myth"))
+async def cmd_test_my(message: types.Message):
+    await message.reply("⚡ Разбор мифа через Gemini 3.7 (без арта)...")
+    success, res = await generate_and_publish_post(RUBRIC_MYTHS, with_image=False)
+    await message.reply("✅ " + res if success else "❌ " + res)
+
+@dp.message(Command("test_science"))
+async def cmd_test_sci(message: types.Message):
+    await message.reply("⚡ Научный дайджест РКО / PubMed через Gemini 3.7 (без арта)...")
+    success, res = await generate_and_publish_post(RUBRIC_ACADEMIC_SCIENCE, with_image=False)
     await message.reply("✅ " + res if success else "❌ " + res)
 
 @dp.message(F.text)
