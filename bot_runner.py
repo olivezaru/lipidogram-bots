@@ -273,7 +273,6 @@ def generate_kie_text_and_prompt(user_prompt: str) -> tuple[str, str]:
                     continue
 
                 raw_text = content_parts[0].get("text", "")
-                
                 clean_str = raw_text.strip()
                 if clean_str.startswith("```json"):
                     clean_str = clean_str[7:]
@@ -286,7 +285,6 @@ def generate_kie_text_and_prompt(user_prompt: str) -> tuple[str, str]:
                 match = re.search(r'\{[\s\S]*\}', clean_str)
                 if match:
                     parsed = json.loads(match.group(0))
-                    
                     if "code" in parsed and "msg" in parsed:
                         continue
 
@@ -573,13 +571,11 @@ def fetch_global_youtube_video() -> dict:
                     title = title_elem.text
                     video_direct_url = f"https://www.youtube.com/watch?v={vid}"
 
-                    # Проверяем историю публикаций
                     if is_already_published(vid) or is_already_published(video_direct_url):
                         continue
 
                     desc_elem = entry.find(".//media:description", ns)
                     description = desc_elem.text if desc_elem is not None else ""
-
                     combined_text = f"{title} {description}".lower()
 
                     if any(stop_w in combined_text for stop_w in UPCOMING_STOP_WORDS):
