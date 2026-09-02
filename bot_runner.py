@@ -138,22 +138,44 @@ SYSTEM_PROMPT = """
 }
 """
 
+def parse_model_json(raw_text: str) -> tuple[str, str]:
+    """Извлекает post_text и image_prompt из текста ответа модели."""
+    if not raw_text:
+        return None, None
+    clean_str = raw_text.strip()
+    if clean_str.startswith("```json"):
+        clean_str = clean_str[7:]
+    if clean_str.startswith("```"):
+        clean_str = clean_str[3:]
+    if clean_str.endswith("```"):
+        clean_str = clean_str[:-3]
+    clean_str = clean_str.strip()
+
+    match = re.search(r'\{[\s\S]*\}', clean_str)
+    if match:
+        try:
+            parsed = json.loads(match.group(0))
+            if "code" in parsed and "msg" in parsed:
+                return None, None
+            post_text = parsed.get("post_text") or parsed.get("text") or parsed.get("post") or parsed.get("content")
+            image_prompt = parsed.get("image_prompt") or parsed.get("prompt") or parsed.get("image")
+            if post_text and len(str(post_text).strip()) > 50:
+                return str(post_text).strip(), str(image_prompt or "healthy cardiology food lifestyle").strip()
+        except Exception:
+            pass
+    return None, None
+
 async def generate_kie_text_and_prompt(user_prompt: str) -> tuple[str, str]:
     if not KIE_KEY:
         raise ValueError("KIE_API_KEY не установлен в переменных окружения!")
 
-    urls = [
-        f"https://api.kie.ai/gemini/v1/models/gemini-3.7-flash:generateContent?key={KIE_KEY}",
-        f"https://api.kie.ai/gemini/v1/models/gemini-3-7-flash:generateContent?key={KIE_KEY}"
-    ]
-    
     headers = {
         "Authorization": f"Bearer {KIE_KEY}",
         "x-goog-api-key": KIE_KEY,
         "Content-Type": "application/json"
     }
 
-    payload = {
+    gemini_payload = {
         "contents": [
             {
                 "parts": [
@@ -167,58 +189,66 @@ async def generate_kie_text_and_prompt(user_prompt: str) -> tuple[str, str]:
         }
     }
 
+    openai_payload = {
+        "model": "gemini-3.7-flash",
+        "messages": [
+            {"role": "system", "content": f"{SYSTEM_PROMPT}\n\nВерни ТОЛЬКО валидный JSON с ключами post_text и image_prompt."},
+            {"role": "user", "content": user_prompt}
+        ],
+        "temperature": 0.75
+    }
+
+    endpoints = [
+        # 1. Google Gemini Native format (v1 & v1beta)
+        ("gemini_native", f"https://api.kie.ai/gemini/v1beta/models/gemini-3.7-flash:generateContent?key={KIE_KEY}", gemini_payload),
+        ("gemini_native", f"https://api.kie.ai/gemini/v1/models/gemini-3.7-flash:generateContent?key={KIE_KEY}", gemini_payload),
+        ("gemini_native", f"https://api.kie.ai/gemini/v1/models/gemini-3-7-flash:generateContent?key={KIE_KEY}", gemini_payload),
+        # 2. OpenAI-compatible chat format in KIE.ai
+        ("chat_completions", "https://api.kie.ai/api/v1/chat/completions", openai_payload),
+        ("chat_completions", "https://api.kie.ai/v1/chat/completions", openai_payload)
+    ]
+
     last_error = ""
+
     async with aiohttp.ClientSession() as session:
-        for target_url in urls:
-            try:
-                logging.info("Отправка запроса в KIE.ai Gemini 3.7 Flash...")
-                async with session.post(target_url, headers=headers, json=payload, timeout=aiohttp.ClientTimeout(total=40)) as resp:
-                    if resp.status == 200:
-                        raw_json = await resp.json()
-                        
-                        if isinstance(raw_json, dict) and (raw_json.get("code") in [500, 400, 401, 403] or "Server exception" in str(raw_json)):
-                            last_error = f"KIE error: {raw_json.get('msg', 'Server exception')}"
-                            continue
-
-                        candidates = raw_json.get("candidates", []) if isinstance(raw_json, dict) else []
-                        if not candidates:
-                            continue
-
-                        content_parts = candidates[0].get("content", {}).get("parts", [])
-                        if not content_parts:
-                            continue
-
-                        raw_text = content_parts[0].get("text", "")
-                        
-                        clean_str = raw_text.strip()
-                        if clean_str.startswith("```json"):
-                            clean_str = clean_str[7:]
-                        if clean_str.startswith("```"):
-                            clean_str = clean_str[3:]
-                        if clean_str.endswith("```"):
-                            clean_str = clean_str[:-3]
-                        clean_str = clean_str.strip()
-
-                        match = re.search(r'\{[\s\S]*\}', clean_str)
-                        if match:
-                            parsed = json.loads(match.group(0))
-                            
-                            if "code" in parsed and "msg" in parsed:
+        # 2 попытки с перебором эндпоинтов
+        for retry in range(1, 3):
+            for mode, target_url, payload in endpoints:
+                try:
+                    logging.info(f"Запрос в KIE.ai Gemini (попытка {retry}, url: {target_url[:55]}...)...")
+                    async with session.post(target_url, headers=headers, json=payload, timeout=aiohttp.ClientTimeout(total=40)) as resp:
+                        if resp.status == 200:
+                            raw_json = await resp.json()
+                            if isinstance(raw_json, dict) and (raw_json.get("code") in [500, 400, 401, 403] or "Server exception" in str(raw_json)):
+                                last_error = f"KIE error {raw_json.get('code')}: {raw_json.get('msg', 'Server exception')}"
                                 continue
 
-                            post_text = parsed.get("post_text") or parsed.get("text") or parsed.get("post") or parsed.get("content")
-                            image_prompt = parsed.get("image_prompt") or parsed.get("prompt") or parsed.get("image")
-                            
-                            if post_text and len(str(post_text).strip()) > 50:
-                                return str(post_text).strip(), str(image_prompt or "healthy cardiology food lifestyle").strip()
-                    else:
-                        text_err = await resp.text()
-                        last_error = f"HTTP {resp.status}: {text_err[:120]}"
-            except Exception as e:
-                last_error = str(e)
-                continue
+                            if mode == "gemini_native":
+                                candidates = raw_json.get("candidates", []) if isinstance(raw_json, dict) else []
+                                if candidates:
+                                    parts = candidates[0].get("content", {}).get("parts", [])
+                                    if parts:
+                                        post_t, img_p = parse_model_json(parts[0].get("text", ""))
+                                        if post_t:
+                                            return post_t, img_p
+                            elif mode == "chat_completions":
+                                choices = raw_json.get("choices", [])
+                                if choices:
+                                    content = choices[0].get("message", {}).get("content", "")
+                                    post_t, img_p = parse_model_json(content)
+                                    if post_t:
+                                        return post_t, img_p
+                        else:
+                            text_err = await resp.text()
+                            last_error = f"HTTP {resp.status}: {text_err[:100]}"
+                except Exception as e:
+                    last_error = str(e)
+                    continue
+            
+            if retry < 2:
+                await asyncio.sleep(2.5)
 
-    raise Exception(f"KIE.ai Gemini 3.7 ошибка: {last_error}")
+    raise Exception(f"KIE.ai Gemini ошибка: {last_error}")
 
 def extract_all_urls_from_any_json(obj) -> list:
     """Рекурсивно ищет любые прямые ссылки на изображения в структуре ответа."""
