@@ -311,24 +311,21 @@ def generate_kie_text_and_prompt(user_prompt: str) -> tuple[str, str]:
         }
     }
 
-    # Попытка 1: KIE Gemini endpoints (v1beta / v1) с таймаутом (90 сек) — строго Gemini 3.7 и 3.6
+    # Попытка 1: KIE Gemini endpoint (v1) с таймаутом (90 сек) — модель gemini-3.7-flash
     gemini_urls = [
-        f"https://api.kie.ai/gemini/v1beta/models/gemini-3.7-flash:generateContent?key={KIE_KEY}",
         f"https://api.kie.ai/gemini/v1/models/gemini-3.7-flash:generateContent?key={KIE_KEY}",
-        f"https://api.kie.ai/gemini/v1beta/models/gemini-3.6-flash:generateContent?key={KIE_KEY}",
-        f"https://api.kie.ai/gemini/v1/models/gemini-3.6-flash:generateContent?key={KIE_KEY}"
+        f"https://api.kie.ai/gemini/v1/models/gemini-3.7-flash:generateContent"
     ]
 
     last_error = ""
     for target_url in gemini_urls:
         try:
-            model_label = "gemini-3.7-flash" if "3.7" in target_url else "gemini-3.6-flash"
-            logging.info(f"Отправка запроса в KIE.ai ({model_label}, таймаут 90с)...")
+            logging.info("Отправка запроса в KIE.ai (gemini-3.7-flash, таймаут 90с)...")
             resp = requests.post(target_url, headers=headers_gemini, json=gemini_payload, timeout=90)
             if resp.status_code == 200:
                 raw_json = resp.json()
-                if isinstance(raw_json, dict) and (raw_json.get("code") in [500, 400, 401, 403] or "Server exception" in str(raw_json)):
-                    last_error = f"KIE error: {raw_json.get('msg', 'Server exception')}"
+                if isinstance(raw_json, dict) and (raw_json.get("code") in [500, 400, 401, 403, 404] or "The page does not exist" in str(raw_json) or "Server exception" in str(raw_json)):
+                    last_error = f"KIE error: {raw_json.get('msg') or raw_json.get('message', 'Server exception')}"
                     continue
 
                 candidates = raw_json.get("candidates", []) if isinstance(raw_json, dict) else []
@@ -353,37 +350,45 @@ def generate_kie_text_and_prompt(user_prompt: str) -> tuple[str, str]:
             last_error = str(e)
             continue
 
-    # Попытка 2: Fallback через OpenAI-совместимый эндпоинт KIE (/v1/chat/completions) — только 3.7 и 3.6
+    # Попытка 2: KIE /v1/chat/completions и /api/v1/chat/completions
     openai_headers = {
         "Authorization": f"Bearer {KIE_KEY}",
         "Content-Type": "application/json"
     }
-    for chat_model in ["gemini-3.7-flash", "gemini-3.6-flash"]:
-        try:
-            logging.info(f"Fallback через KIE /v1/chat/completions ({chat_model})...")
-            chat_payload = {
-                "model": chat_model,
-                "messages": [
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": user_prompt}
-                ],
-                "temperature": 0.7,
-                "max_tokens": 1600
-            }
-            c_resp = requests.post("https://api.kie.ai/v1/chat/completions", headers=openai_headers, json=chat_payload, timeout=70)
-            if c_resp.status_code == 200:
-                c_json = c_resp.json()
-                choices = c_json.get("choices", [])
-                if choices:
-                    raw_text = choices[0].get("message", {}).get("content", "")
-                    post_text, image_prompt = extract_post_and_prompt_from_text(raw_text)
-                    if post_text:
-                        return post_text, image_prompt
-            else:
-                last_error = f"HTTP {c_resp.status_code}: {c_resp.text[:120]}"
-        except Exception as ce:
-            last_error = str(ce)
-            continue
+    chat_endpoints = [
+        "https://api.kie.ai/v1/chat/completions",
+        "https://api.kie.ai/api/v1/chat/completions"
+    ]
+    for c_url in chat_endpoints:
+        for chat_model in ["gemini-3.7-flash", "gemini-3.6-flash"]:
+            try:
+                logging.info(f"Fallback через KIE {c_url} ({chat_model})...")
+                chat_payload = {
+                    "model": chat_model,
+                    "messages": [
+                        {"role": "system", "content": SYSTEM_PROMPT},
+                        {"role": "user", "content": user_prompt}
+                    ],
+                    "temperature": 0.7,
+                    "max_tokens": 1600
+                }
+                c_resp = requests.post(c_url, headers=openai_headers, json=chat_payload, timeout=75)
+                if c_resp.status_code == 200:
+                    c_json = c_resp.json()
+                    if isinstance(c_json, dict) and (c_json.get("code") in [500, 400, 401, 403, 404] or "The page does not exist" in str(c_json)):
+                        last_error = f"KIE error: {c_json.get('msg') or c_json.get('message', 'Page not found')}"
+                        continue
+                    choices = c_json.get("choices", [])
+                    if choices:
+                        raw_text = choices[0].get("message", {}).get("content", "")
+                        post_text, image_prompt = extract_post_and_prompt_from_text(raw_text)
+                        if post_text:
+                            return post_text, image_prompt
+                else:
+                    last_error = f"HTTP {c_resp.status_code}: {c_resp.text[:120]}"
+            except Exception as ce:
+                last_error = str(ce)
+                continue
 
     raise Exception(f"KIE.ai ошибка генерации текста: {last_error}")
 
