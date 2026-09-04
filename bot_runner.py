@@ -101,7 +101,8 @@ def find_xml_elem(parent, tag_names: list):
     """
     Безопасный поиск первого существующего тега в XML ElementTree.
     В Python bool(Element) возвращает False, если у тега нет дочерних узлов!
-    Поэтому конструкция 'elem.find("a") or elem.find("b")' всегда сбрасывалась в None.
+    Поэтому конструкция 'elem.find("a") or elem.find("b")' всегда ломается.
+    Данная функция проверяет 'is not None'.
     """
     for tag in tag_names:
         elem = parent.find(tag)
@@ -156,6 +157,15 @@ RU_JOURNALS_RSS = [
         "hashtags": "#Липидограм_Наука #NPlus1 #Доказательно #Кардиология"
     },
     {
+        "id": "naked_science",
+        "aliases": ["ns", "naked", "naked_science", "нейкед", "нейкед_сайнс"],
+        "type": "rss",
+        "name": "Naked Science (Медицина и здоровье)",
+        "rss": "https://naked-science.ru/article/medicine/feed",
+        "category": "🔬 ДОКАЗАТЕЛЬНАЯ МЕДИЦИНА И НАУКА",
+        "hashtags": "#Липидограм_Наука #NakedScience #Медицина #Кардиология"
+    },
+    {
         "id": "22century",
         "aliases": ["22", "xx2", "22century", "22век", "век"],
         "type": "rss",
@@ -163,7 +173,8 @@ RU_JOURNALS_RSS = [
         "rss": "https://22century.ru/feed",
         "category": "🔬 НАУКА И ДОКАЗАТЕЛЬНАЯ МЕДИЦИНА",
         "hashtags": "#Липидограм_Наука #Наука #Здоровье #Кардиология",
-        "timeout": 4
+        "timeout": 3,
+        "cloud_blocked": True
     }
 ]
 
@@ -563,8 +574,11 @@ def fetch_russian_journals_rss(target_source: str = None) -> dict:
             journals = matched
         else:
             logging.warning(f"Источник '{target_source}' не распознан, используем случайный пул.")
+            journals = [j for j in journals if not j.get("cloud_blocked")]
             random.shuffle(journals)
     else:
+        # Исключаем источники, блокирующие зарубежные IP облачных платформ (Render/AWS/GCP)
+        journals = [j for j in journals if not j.get("cloud_blocked")]
         random.shuffle(journals)
 
     for j in journals:
@@ -591,6 +605,7 @@ def fetch_russian_journals_rss(target_source: str = None) -> dict:
                     title_elem = find_xml_elem(item, ["title", "{http://www.w3.org/2005/Atom}title"])
                     link_elem = find_xml_elem(item, ["link", "{http://www.w3.org/2005/Atom}link"])
                     desc_elem = find_xml_elem(item, [
+                        "{http://turbo.yandex.ru}content",
                         "{http://purl.org/rss/1.0/modules/content/}encoded",
                         "description",
                         "{http://www.w3.org/2005/Atom}summary",
@@ -701,9 +716,10 @@ def check_russian_journals_status() -> str:
             else:
                 results.append(f"🔴 <b>{name}</b>: HTTP {resp.status_code} ({elapsed:.2f}с)\n")
         except requests.Timeout:
+            note = " [Исключен из авто-ротации]" if j.get("cloud_blocked") else ""
             results.append(
-                f"🔴 <b>{name}</b> (RSS)\n"
-                f"• Статус: Таймаут соединения ({timeout_sec}с). Сервер блокирует облачные IP.\n"
+                f"🔴 <b>{name}</b> (RSS){note}\n"
+                f"• Статус: Таймаут соединения ({timeout_sec}с). Сервер 22century.ru блокирует IP дата-центров (Render/AWS).\n"
             )
         except Exception as e:
             results.append(f"🔴 <b>{name}</b>: Ошибка {e}\n")
@@ -1181,6 +1197,7 @@ async def cmd_start(message: types.Message):
         "• <code>/test_ru habr</code> (или /test_habr) — тест «Хабр Здоровье»\n"
         "• <code>/test_ru biotech</code> (или /test_biotech) — тест «Хабр Биотех»\n"
         "• <code>/test_ru n1</code> (или /test_nplus1) — тест «N+1»\n"
+        "• <code>/test_ru ns</code> (или /test_naked) — тест «Naked Science (Медицина)»\n"
         "• <code>/test_ru bio</code> (или /test_bio) — тест «Биомолекула»\n\n"
         "<b>🖼 Публикации С картинкой Nano Banana 2 Lite:</b>\n"
         "• /post_now — по расписанию дня\n"
@@ -1273,6 +1290,10 @@ async def cmd_test_ru(message: types.Message):
         "nplus1": "«N+1»",
         "n1": "«N+1»",
         "н1": "«N+1»",
+        "ns": "«Naked Science»",
+        "naked": "«Naked Science»",
+        "naked_science": "«Naked Science»",
+        "нейкед": "«Naked Science»",
         "bio": "«Биомолекула»",
         "био": "«Биомолекула»",
         "biomolecula": "«Биомолекула»",
@@ -1281,7 +1302,7 @@ async def cmd_test_ru(message: types.Message):
         "22century": "«XX2 Век»"
     }
 
-    label = target_labels.get(target, f"«{target}»") if target else "случайный журнал (Биомолекула, Зожник, Хабр, N+1)"
+    label = target_labels.get(target, f"«{target}»") if target else "случайный журнал (Биомолекула, Зожник, Хабр, N+1, Naked Science)"
     await message.reply(f"⚡ Анализирую российские журналы [{label}] (без арта)...")
     success, res = await generate_and_publish_post(with_image=False, source_mode="ru_journals", target_source=target)
     await message.reply("✅ " + res if success else "❌ " + res)
@@ -1311,6 +1332,12 @@ async def cmd_test_nplus1(message: types.Message):
     success, res = await generate_and_publish_post(with_image=False, source_mode="ru_journals", target_source="nplus1")
     await message.reply("✅ " + res if success else "❌ " + res)
 
+@dp.message(Command("test_naked", "test_ns"))
+async def cmd_test_naked(message: types.Message):
+    await message.reply("⚡ Запрашиваю статью из «Naked Science (Медицина)» (без арта)...")
+    success, res = await generate_and_publish_post(with_image=False, source_mode="ru_journals", target_source="naked_science")
+    await message.reply("✅ " + res if success else "❌ " + res)
+
 @dp.message(Command("test_bio", "test_biomolecula"))
 async def cmd_test_bio(message: types.Message):
     await message.reply("⚡ Запрашиваю статью из «Биомолекула» (без арта)...")
@@ -1320,7 +1347,7 @@ async def cmd_test_bio(message: types.Message):
 # Команда комплексной диагностики статуса всех российских источников
 @dp.message(Command("test_ru_status", "check_ru", "status_ru"))
 async def cmd_test_ru_status(message: types.Message):
-    await message.reply("🔎 Опрашиваю все российские источники (Биомолекула, Зожник, Хабр Здоровье, Хабр Биотех, N+1, XX2 Век)...")
+    await message.reply("🔎 Опрашиваю все российские источники (Биомолекула, Зожник, Хабр Здоровье, Хабр Биотех, N+1, Naked Science)...")
     report = check_russian_journals_status()
     await message.reply(
         f"📊 <b>ДИАГНОСТИКА РОССИЙСКИХ ИЗДАНИЙ:</b>\n\n{report}\n"
@@ -1329,6 +1356,7 @@ async def cmd_test_ru_status(message: types.Message):
         f"• <code>/test_ru habr</code> или <code>/test_habr</code>\n"
         f"• <code>/test_ru biotech</code> или <code>/test_biotech</code>\n"
         f"• <code>/test_ru n1</code> или <code>/test_nplus1</code>\n"
+        f"• <code>/test_ru ns</code> или <code>/test_naked</code>\n"
         f"• <code>/test_ru bio</code> или <code>/test_bio</code>",
         parse_mode="HTML"
     )
@@ -1439,10 +1467,7 @@ async def main():
 
     if bot_poster:
         if bot_moderator and bot_moderator != bot_poster:
-            await asyncio.gather(
-                dp.start_polling(bot_poster),
-                dp.start_polling(bot_moderator)
-            )
+            await dp.start_polling(bot_poster, bot_moderator)
         else:
             await dp.start_polling(bot_poster)
     else:
