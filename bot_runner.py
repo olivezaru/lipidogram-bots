@@ -258,45 +258,22 @@ SYSTEM_PROMPT = """
 }
 """
 
-def extract_post_and_prompt_from_text(raw_text: str) -> tuple[str, str]:
-    if not raw_text:
-        return "", ""
-    clean_str = raw_text.strip()
-    if clean_str.startswith("```json"):
-        clean_str = clean_str[7:]
-    if clean_str.startswith("```"):
-        clean_str = clean_str[3:]
-    if clean_str.endswith("```"):
-        clean_str = clean_str[:-3]
-    clean_str = clean_str.strip()
-
-    match = re.search(r'\{[\s\S]*\}', clean_str)
-    if match:
-        try:
-            parsed = json.loads(match.group(0))
-            if isinstance(parsed, dict) and not ("code" in parsed and "msg" in parsed):
-                post_text = parsed.get("post_text") or parsed.get("text") or parsed.get("post") or parsed.get("content")
-                image_prompt = parsed.get("image_prompt") or parsed.get("prompt") or parsed.get("image")
-                if post_text and len(str(post_text).strip()) > 50:
-                    return str(post_text).strip(), str(image_prompt or "healthy cardiology food lifestyle").strip()
-        except Exception:
-            pass
-
-    if len(clean_str) > 80:
-        return clean_str, "healthy cardiology food lifestyle"
-    return "", ""
-
 def generate_kie_text_and_prompt(user_prompt: str) -> tuple[str, str]:
     if not KIE_KEY:
         raise ValueError("KIE_API_KEY не установлен в переменных окружения!")
 
-    headers_gemini = {
+    urls = [
+        f"https://api.kie.ai/gemini/v1/models/gemini-3.7-flash:generateContent?key={KIE_KEY}",
+        f"https://api.kie.ai/gemini/v1/models/gemini-3-7-flash:generateContent?key={KIE_KEY}"
+    ]
+    
+    headers = {
         "Authorization": f"Bearer {KIE_KEY}",
         "x-goog-api-key": KIE_KEY,
         "Content-Type": "application/json"
     }
 
-    gemini_payload = {
+    payload = {
         "contents": [
             {
                 "parts": [
@@ -305,27 +282,21 @@ def generate_kie_text_and_prompt(user_prompt: str) -> tuple[str, str]:
             }
         ],
         "generationConfig": {
-            "temperature": 0.7,
-            "maxOutputTokens": 1600,
+            "temperature": 0.75,
             "responseMimeType": "application/json"
         }
     }
 
-    # Попытка 1: KIE Gemini endpoint (v1) с таймаутом (90 сек) — модель gemini-3.7-flash
-    gemini_urls = [
-        f"https://api.kie.ai/gemini/v1/models/gemini-3.7-flash:generateContent?key={KIE_KEY}",
-        f"https://api.kie.ai/gemini/v1/models/gemini-3.7-flash:generateContent"
-    ]
-
     last_error = ""
-    for target_url in gemini_urls:
+    for target_url in urls:
         try:
-            logging.info("Отправка запроса в KIE.ai (gemini-3.7-flash, таймаут 90с)...")
-            resp = requests.post(target_url, headers=headers_gemini, json=gemini_payload, timeout=90)
+            logging.info("Отправка запроса в KIE.ai Gemini 3.7 Flash (таймаут 90с)...")
+            resp = requests.post(target_url, headers=headers, json=payload, timeout=90)
             if resp.status_code == 200:
                 raw_json = resp.json()
-                if isinstance(raw_json, dict) and (raw_json.get("code") in [500, 400, 401, 403, 404] or "The page does not exist" in str(raw_json) or "Server exception" in str(raw_json)):
-                    last_error = f"KIE error: {raw_json.get('msg') or raw_json.get('message', 'Server exception')}"
+                
+                if isinstance(raw_json, dict) and (raw_json.get("code") in [500, 400, 401, 403] or "Server exception" in str(raw_json)):
+                    last_error = f"KIE error: {raw_json.get('msg', 'Server exception')}"
                     continue
 
                 candidates = raw_json.get("candidates", []) if isinstance(raw_json, dict) else []
@@ -337,60 +308,33 @@ def generate_kie_text_and_prompt(user_prompt: str) -> tuple[str, str]:
                     continue
 
                 raw_text = content_parts[0].get("text", "")
-                post_text, image_prompt = extract_post_and_prompt_from_text(raw_text)
-                if post_text:
-                    return post_text, image_prompt
+                clean_str = raw_text.strip()
+                if clean_str.startswith("```json"):
+                    clean_str = clean_str[7:]
+                if clean_str.startswith("```"):
+                    clean_str = clean_str[3:]
+                if clean_str.endswith("```"):
+                    clean_str = clean_str[:-3]
+                clean_str = clean_str.strip()
+
+                match = re.search(r'\{[\s\S]*\}', clean_str)
+                if match:
+                    parsed = json.loads(match.group(0))
+                    if "code" in parsed and "msg" in parsed:
+                        continue
+
+                    post_text = parsed.get("post_text") or parsed.get("text") or parsed.get("post") or parsed.get("content")
+                    image_prompt = parsed.get("image_prompt") or parsed.get("prompt") or parsed.get("image")
+                    
+                    if post_text and len(str(post_text).strip()) > 50:
+                        return str(post_text).strip(), str(image_prompt or "healthy cardiology food lifestyle").strip()
             else:
                 last_error = f"HTTP {resp.status_code}: {resp.text[:120]}"
-        except requests.exceptions.Timeout:
-            last_error = f"Таймаут KIE.ai (>90с) для {target_url}"
-            logging.warning(f"Таймаут ожидания KIE.ai: {target_url}, переходим к следующему маршруту...")
-            continue
         except Exception as e:
             last_error = str(e)
             continue
 
-    # Попытка 2: KIE /v1/chat/completions и /api/v1/chat/completions
-    openai_headers = {
-        "Authorization": f"Bearer {KIE_KEY}",
-        "Content-Type": "application/json"
-    }
-    chat_endpoints = [
-        "https://api.kie.ai/v1/chat/completions",
-        "https://api.kie.ai/api/v1/chat/completions"
-    ]
-    for c_url in chat_endpoints:
-        for chat_model in ["gemini-3.7-flash", "gemini-3.6-flash"]:
-            try:
-                logging.info(f"Fallback через KIE {c_url} ({chat_model})...")
-                chat_payload = {
-                    "model": chat_model,
-                    "messages": [
-                        {"role": "system", "content": SYSTEM_PROMPT},
-                        {"role": "user", "content": user_prompt}
-                    ],
-                    "temperature": 0.7,
-                    "max_tokens": 1600
-                }
-                c_resp = requests.post(c_url, headers=openai_headers, json=chat_payload, timeout=75)
-                if c_resp.status_code == 200:
-                    c_json = c_resp.json()
-                    if isinstance(c_json, dict) and (c_json.get("code") in [500, 400, 401, 403, 404] or "The page does not exist" in str(c_json)):
-                        last_error = f"KIE error: {c_json.get('msg') or c_json.get('message', 'Page not found')}"
-                        continue
-                    choices = c_json.get("choices", [])
-                    if choices:
-                        raw_text = choices[0].get("message", {}).get("content", "")
-                        post_text, image_prompt = extract_post_and_prompt_from_text(raw_text)
-                        if post_text:
-                            return post_text, image_prompt
-                else:
-                    last_error = f"HTTP {c_resp.status_code}: {c_resp.text[:120]}"
-            except Exception as ce:
-                last_error = str(ce)
-                continue
-
-    raise Exception(f"KIE.ai ошибка генерации текста: {last_error}")
+    raise Exception(f"KIE.ai Gemini 3.7 ошибка: {last_error}")
 
 def extract_all_urls_from_any_json(obj) -> list:
     found = []
@@ -975,10 +919,8 @@ async def generate_and_publish_post(custom_rubric: dict = None, with_image: bool
 
     if custom_rubric:
         rubric = custom_rubric
-    elif source_mode == "random":
-        rubric = random.choice(ALL_RUBRICS_POOL)
     else:
-        rubric = pick_rubric_by_schedule()
+        rubric = random.choice(ALL_RUBRICS_POOL) if source_mode == "random" else pick_rubric_by_schedule()
 
     style = rubric.get("style_type", "expert_review")
     img_bytes = None
@@ -1057,71 +999,41 @@ async def generate_and_publish_post(custom_rubric: dict = None, with_image: bool
 
     try:
         clean_html = sanitize_html_for_telegram(post_text)
-        target_chat_id = int(CHANNEL_ID) if (str(CHANNEL_ID).startswith("-") and str(CHANNEL_ID)[1:].isdigit()) or str(CHANNEL_ID).isdigit() else CHANNEL_ID
 
         if img_bytes and len(img_bytes) > 2000:
             photo_file = BufferedInputFile(img_bytes, filename="lipidogram_post.jpg")
             
             if len(clean_html) <= 1024:
-                try:
-                    sent_msg = await bot_poster.send_photo(
-                        chat_id=target_chat_id,
-                        photo=photo_file,
-                        caption=clean_html,
-                        parse_mode="HTML"
-                    )
-                except Exception as html_err:
-                    logging.warning(f"Ошибка HTML-разметки при отправке фото: {html_err}, отправка без разметки...")
-                    sent_msg = await bot_poster.send_photo(
-                        chat_id=target_chat_id,
-                        photo=photo_file,
-                        caption=re.sub(r'<[^>]+>', '', clean_html),
-                        parse_mode=None
-                    )
+                sent_msg = await bot_poster.send_photo(
+                    chat_id=CHANNEL_ID,
+                    photo=photo_file,
+                    caption=clean_html,
+                    parse_mode="HTML"
+                )
             else:
-                await bot_poster.send_photo(chat_id=target_chat_id, photo=photo_file)
-                try:
-                    sent_msg = await bot_poster.send_message(
-                        chat_id=target_chat_id,
-                        text=clean_html,
-                        parse_mode="HTML",
-                        disable_web_page_preview=False
-                    )
-                except Exception as html_err:
-                    logging.warning(f"Ошибка HTML-разметки при отправке текста: {html_err}, отправка без разметки...")
-                    sent_msg = await bot_poster.send_message(
-                        chat_id=target_chat_id,
-                        text=re.sub(r'<[^>]+>', '', clean_html),
-                        parse_mode=None,
-                        disable_web_page_preview=False
-                    )
+                await bot_poster.send_photo(chat_id=CHANNEL_ID, photo=photo_file)
+                sent_msg = await bot_poster.send_message(
+                    chat_id=CHANNEL_ID,
+                    text=clean_html,
+                    parse_mode="HTML",
+                    disable_web_page_preview=False
+                )
             
             if study_id:
                 mark_as_published(study_id)
-            logging.info(f"Пост с фото опубликован в {target_chat_id}! ID: {sent_msg.message_id}")
+            logging.info(f"Пост с фото опубликован! ID: {sent_msg.message_id}")
             return True, f"Опубликован пост («{rubric['category']}») с иллюстрацией Nano Banana!"
 
-        try:
-            sent_msg = await bot_poster.send_message(
-                chat_id=target_chat_id,
-                text=clean_html,
-                parse_mode="HTML",
-                disable_web_page_preview=False
-            )
-        except Exception as html_err:
-            logging.warning(f"Ошибка HTML-разметки: {html_err}, отправка чистым текстом...")
-            sent_msg = await bot_poster.send_message(
-                chat_id=target_chat_id,
-                text=re.sub(r'<[^>]+>', '', clean_html),
-                parse_mode=None,
-                disable_web_page_preview=False
-            )
+        sent_msg = await bot_poster.send_message(
+            chat_id=CHANNEL_ID,
+            text=clean_html,
+            parse_mode="HTML",
+            disable_web_page_preview=False
+        )
         if study_id:
             mark_as_published(study_id)
-        logging.info(f"Пост без фото опубликован в {target_chat_id}! ID: {sent_msg.message_id}")
         return True, f"Опубликован пост («{rubric['category']}») без фото."
     except Exception as e:
-        logging.error(f"Ошибка отправки в Telegram (chat_id={CHANNEL_ID}): {e}")
         return False, f"Ошибка отправки в Telegram: {e}"
 
 @dp.message(Command("start"))
