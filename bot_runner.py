@@ -30,6 +30,8 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 MODERATOR_TOKEN = os.getenv("MODERATOR_BOT_TOKEN", "").strip()
 POSTER_TOKEN = os.getenv("POSTER_BOT_TOKEN", "").strip()
 KIE_KEY = os.getenv("KIE_API_KEY", "").strip()
+GEMINI_KEY = os.getenv("GEMINI_API_KEY", "").strip() or os.getenv("GOOGLE_API_KEY", "").strip()
+KIE_MODEL = os.getenv("KIE_MODEL", "").strip()
 CHANNEL_ID = os.getenv("CHANNEL_ID", "@lipidogram").strip()
 PORT = int(os.getenv("PORT", 8080))
 
@@ -164,17 +166,6 @@ RU_JOURNALS_RSS = [
         "rss": "https://naked-science.ru/article/medicine/feed",
         "category": "🔬 ДОКАЗАТЕЛЬНАЯ МЕДИЦИНА И НАУКА",
         "hashtags": "#Липидограм_Наука #NakedScience #Медицина #Кардиология"
-    },
-    {
-        "id": "22century",
-        "aliases": ["22", "xx2", "22century", "22век", "век"],
-        "type": "rss",
-        "name": "XX2 Век (Доказательная медицина и биология)",
-        "rss": "https://22century.ru/feed",
-        "category": "🔬 НАУКА И ДОКАЗАТЕЛЬНАЯ МЕДИЦИНА",
-        "hashtags": "#Липидограм_Наука #Наука #Здоровье #Кардиология",
-        "timeout": 3,
-        "cloud_blocked": True
     }
 ]
 
@@ -205,6 +196,60 @@ HEALTH_KEYWORDS = [
     "blood pressure", "hypertension", "diet", "fasting", "exercise", "longevity", "lipids",
     "statins", "triglycerides", "omega-3", "nutrition", "vessel", "plaque", "glucose", "metabolism", "recipe"
 ]
+
+# Ключевые слова и стоп-слова для строгого отбора статей из российских научных журналов (Хабр, N+1, Naked Science, Биомолекула)
+RU_HIGH_PRIO_KEYWORDS = [
+    "холестерин", "сосуд", "сердц", "лпнп", "лпвп", "давлен", "гипертон", "гипертензи",
+    "атеросклероз", "бляшк", "артери", "инфаркт", "инсульт", "апоб", "apob", "триглицерид",
+    "липид", "кардио", "статин", "омега", "клетчатк"
+]
+
+RU_HEALTH_KEYWORDS = RU_HIGH_PRIO_KEYWORDS + [
+    "питан", "диет", "жир", "метаболизм", "глюкоз", "диабет", "инсулин",
+    "микробиом", "печен", "ожирени", "спорт", "тренировк", "ходьб", "сон",
+    "бег", "пульс", "долголети", "старени", "кров", "ген", "днк", "лекарств",
+    "препарат", "пациент", "клиническ", "воспалени", "биохими", "нутриент",
+    "калори", "белок", "углевод", "соль", "натрий", "сосудист", "эндотел"
+]
+
+# Стоп-слова: приложения, IT, программирование, сканеры, штрихкоды, космос и нерелевантные темы
+RU_STOP_WORDS = [
+    "штрихкод", "сканер", "сканирован", "руководител", "стартап", "репозитор", "devops", 
+    "киборг", "ваканси", "карьер", "астероид", "галактик", "луна", "марс", "космос",
+    "динозавр", "палеонтолог", "квантов", "телескоп", "дрон", "оружи",
+    "приложени", "obsidian", "гаджет", "смартфон", "чат-бот", "нейросеть",
+    "программист", "разработк", "личную систему", "crm", "бэкэнд", "фронтенд",
+    "flutter", "swift", "backend", "frontend", "linux", "архитектур", "микросервис",
+    "релиз", "баг", "код", "ocr", "распознаван"
+]
+
+def is_relevant_ru_article(title: str, text: str) -> tuple[bool, int]:
+    """
+    Проверяет релевантность статьи тематике канала «Липидограм» (кардиология, сосуды, питание, метаболизм).
+    Возвращает (is_relevant: bool, score: int).
+    score: 2 = кардио / липиды / сосуды (наивысший приоритет)
+    score: 1 = доказательная медицина / биология / ЗОЖ / метаболизм
+    score: 0 = не релевантна / содержит IT-стоп-слова
+    """
+    combined = f"{title} {text}".lower()
+    title_lower = title.lower()
+
+    # Жесткий фильтр стоп-слов: если в заголовке или тексте софт/приложение/штрихкод
+    for sw in RU_STOP_WORDS:
+        if sw in title_lower:
+            return False, 0
+        if sw in combined and not any(h in combined for h in RU_HIGH_PRIO_KEYWORDS):
+            return False, 0
+
+    has_high = any(kw in combined for kw in RU_HIGH_PRIO_KEYWORDS)
+    if has_high:
+        return True, 2
+
+    has_health = any(kw in combined for kw in RU_HEALTH_KEYWORDS)
+    if has_health:
+        return True, 1
+
+    return False, 0
 
 RUBRIC_RECIPES = {
     "category": "🥗 ГИПОЛИПИДЕМИЧЕСКАЯ КУХНЯ",
@@ -253,7 +298,7 @@ RUBRIC_RU_JOURNALS = {
     "category": "🇷🇺 РОССИЙСКАЯ ДОКАЗАТЕЛЬНАЯ МЕДИЦИНА",
     "source_type": "ru_journals",
     "style_type": "expert_review",
-    "ru_theme": "Статьи из ведущих российских научных изданий (Биомолекула, Зожник, Хабр Наука, N+1, 22Век)",
+    "ru_theme": "Статьи из ведущих российских научных изданий (Биомолекула, Зожник, Хабр Наука, N+1, Naked Science)",
     "hashtags": "#Липидограм_Наука #Доказательно #Биохимия #Кардиология"
 }
 
@@ -279,10 +324,11 @@ SYSTEM_PROMPT = """
    - «ежедневный объем движения»
    - «интервальная разминка на свежем воздухе»
 2. ЕСЛИ ЭТО РЕЦЕПТ: опирайся СТРОГО на предоставленный список ингредиентов из первоисточника. Опиши простое пошаговое приготовление и объясни пользу для снижения ЛПНП (клетчатка, замена насыщенных жиров на оливковое/льняное масло или авокадо).
-3. Объем текста: 550-800 символов.
-4. Разрешенные теги: <b>, </b>, <i>, </i>, <code>, </code>, <a href="...">.
-5. Знаки < и > пиши словами («менее», «более») или экранируй (&lt; и &gt;).
-6. В самом конце обязательно укажи первоисточник со ссылкой и хештеги.
+3. СТРОГАЯ ТЕМАТИЧЕСКАЯ РЕЛЕВАНТНОСТЬ: Пиши СТРОГО о здоровье, сосудах, кардиологии, липидах (холестерине), метаболизме, биохимии крови или доказательном питании. КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО писать о приложениях, смартфонах, сканерах штрихкодов, IT-софте, программировании, гаджетах или стартапах. Не пытайся «притягивать» посторонние IT-статьи к теме сосудов.
+4. Объем текста: 550-800 символов.
+5. Разрешенные теги: <b>, </b>, <i>, </i>, <code>, </code>, <a href="...">.
+6. Знаки < и > пиши словами («менее», «более») или экранируй (&lt; и &gt;).
+7. В самом конце обязательно укажи первоисточник со ссылкой и хештеги.
 
 ТРЕБОВАНИЯ К IMAGE PROMPT ("image_prompt"):
 - На АНГЛИЙСКОМ языке.
@@ -295,83 +341,225 @@ SYSTEM_PROMPT = """
 }
 """
 
+def extract_text_from_ai_json(raw_json: dict) -> str:
+    """Извлекает сгенерированный текст из ответа Gemini или OpenAI формата."""
+    if not isinstance(raw_json, dict):
+        return ""
+    # OpenAI format: choices[0].message.content
+    choices = raw_json.get("choices")
+    if isinstance(choices, list) and choices:
+        msg = choices[0].get("message", {})
+        content = msg.get("content", "")
+        if content:
+            return str(content).strip()
+    # Gemini format: candidates[0].content.parts[0].text
+    candidates = raw_json.get("candidates")
+    if isinstance(candidates, list) and candidates:
+        content = candidates[0].get("content", {})
+        parts = content.get("parts", [])
+        if isinstance(parts, list) and parts:
+            text = parts[0].get("text", "")
+            if text:
+                return str(text).strip()
+    return ""
+
+def parse_ai_json_response(raw_text: str) -> tuple[str, str]:
+    """Парсит JSON из ответа ИИ и возвращает (post_text, image_prompt)."""
+    if not raw_text:
+        return "", ""
+    clean_str = raw_text.strip()
+    if clean_str.startswith("```json"):
+        clean_str = clean_str[7:]
+    elif clean_str.startswith("```"):
+        clean_str = clean_str[3:]
+    if clean_str.endswith("```"):
+        clean_str = clean_str[:-3]
+    clean_str = clean_str.strip()
+
+    match = re.search(r'\{[\s\S]*\}', clean_str)
+    if match:
+        try:
+            parsed = json.loads(match.group(0))
+            if isinstance(parsed, dict) and "code" not in parsed:
+                post_text = parsed.get("post_text") or parsed.get("text") or parsed.get("post") or parsed.get("content")
+                image_prompt = parsed.get("image_prompt") or parsed.get("prompt") or parsed.get("image")
+                if post_text and len(str(post_text).strip()) > 40:
+                    return str(post_text).strip(), str(image_prompt or "healthy cardiology lifestyle").strip()
+        except Exception:
+            pass
+    return "", ""
+
 def generate_kie_text_and_prompt(user_prompt: str) -> tuple[str, str]:
-    if not KIE_KEY:
-        raise ValueError("KIE_API_KEY не установлен в переменных окружения!")
+    if not KIE_KEY and not GEMINI_KEY:
+        raise ValueError("Ни KIE_API_KEY, ни GEMINI_API_KEY не установлены в переменных окружения!")
 
-    urls = [
-        f"https://api.kie.ai/gemini/v1/models/gemini-3.7-flash:generateContent?key={KIE_KEY}",
-        f"https://api.kie.ai/gemini/v1/models/gemini-3-7-flash:generateContent?key={KIE_KEY}"
-    ]
-    
-    headers = {
-        "Authorization": f"Bearer {KIE_KEY}",
-        "x-goog-api-key": KIE_KEY,
-        "Content-Type": "application/json"
-    }
+    endpoints = []
 
-    payload = {
-        "contents": [
-            {
-                "parts": [
-                    {"text": f"{SYSTEM_PROMPT}\n\nЗАДАНИЕ:\n{user_prompt}"}
-                ]
+    # 0. Если пользователь явно задал конкретную модель в KIE_MODEL
+    if KIE_KEY and KIE_MODEL:
+        endpoints.append({
+            "desc": f"KIE.ai (пользовательская модель {KIE_MODEL})",
+            "url": "https://api.kie.ai/v1/chat/completions",
+            "headers": {"Authorization": f"Bearer {KIE_KEY}", "Content-Type": "application/json"},
+            "payload": {
+                "model": KIE_MODEL,
+                "messages": [
+                    {"role": "user", "content": f"{SYSTEM_PROMPT}\n\nЗАДАНИЕ:\n{user_prompt}"}
+                ],
+                "temperature": 0.75
             }
-        ],
-        "generationConfig": {
-            "temperature": 0.75,
-            "responseMimeType": "application/json"
+        })
+
+    # СТРОГО ТОЛЬКО МОДЕЛЬ GEMINI 3.7 FLASH
+    if KIE_KEY:
+        # 1. KIE.ai официальный выделенный OpenAI-совместимый эндпоинт gemini-3-7-flash-openai
+        endpoints.append({
+            "desc": "KIE.ai Gemini 3.7 Flash (gemini-3-7-flash-openai/v1/chat/completions)",
+            "url": "https://api.kie.ai/gemini-3-7-flash-openai/v1/chat/completions",
+            "headers": {"Authorization": f"Bearer {KIE_KEY}", "Content-Type": "application/json"},
+            "payload": {
+                "model": "gemini-3.7-flash",
+                "messages": [
+                    {"role": "user", "content": f"{SYSTEM_PROMPT}\n\nЗАДАНИЕ:\n{user_prompt}"}
+                ],
+                "temperature": 0.75
+            }
+        })
+        endpoints.append({
+            "desc": "KIE.ai Gemini 3.7 Flash (gemini-3-7-flash-openai со system-ролью)",
+            "url": "https://api.kie.ai/gemini-3-7-flash-openai/v1/chat/completions",
+            "headers": {"Authorization": f"Bearer {KIE_KEY}", "Content-Type": "application/json"},
+            "payload": {
+                "model": "gemini-3.7-flash",
+                "messages": [
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": user_prompt}
+                ],
+                "temperature": 0.75
+            }
+        })
+
+        # 2. KIE.ai Gemini 3.7 Flash через прямые slug-эндпоинты
+        endpoints.append({
+            "desc": "KIE.ai Gemini 3.7 Flash (/gemini-3.7-flash/v1/chat/completions)",
+            "url": "https://api.kie.ai/gemini-3.7-flash/v1/chat/completions",
+            "headers": {"Authorization": f"Bearer {KIE_KEY}", "Content-Type": "application/json"},
+            "payload": {
+                "model": "gemini-3.7-flash",
+                "messages": [
+                    {"role": "user", "content": f"{SYSTEM_PROMPT}\n\nЗАДАНИЕ:\n{user_prompt}"}
+                ],
+                "temperature": 0.75
+            }
+        })
+        endpoints.append({
+            "desc": "KIE.ai Gemini 3.7 Flash (/gemini-3-7-flash/v1/chat/completions)",
+            "url": "https://api.kie.ai/gemini-3-7-flash/v1/chat/completions",
+            "headers": {"Authorization": f"Bearer {KIE_KEY}", "Content-Type": "application/json"},
+            "payload": {
+                "model": "gemini-3-7-flash",
+                "messages": [
+                    {"role": "user", "content": f"{SYSTEM_PROMPT}\n\nЗАДАНИЕ:\n{user_prompt}"}
+                ],
+                "temperature": 0.75
+            }
+        })
+
+        # 3. KIE.ai базовый шлюз /v1/chat/completions
+        endpoints.append({
+            "desc": "KIE.ai /v1/chat/completions (model: gemini-3.7-flash)",
+            "url": "https://api.kie.ai/v1/chat/completions",
+            "headers": {"Authorization": f"Bearer {KIE_KEY}", "Content-Type": "application/json"},
+            "payload": {
+                "model": "gemini-3.7-flash",
+                "messages": [
+                    {"role": "user", "content": f"{SYSTEM_PROMPT}\n\nЗАДАНИЕ:\n{user_prompt}"}
+                ],
+                "temperature": 0.75
+            }
+        })
+        endpoints.append({
+            "desc": "KIE.ai /v1/chat/completions (model: gemini-3-7-flash)",
+            "url": "https://api.kie.ai/v1/chat/completions",
+            "headers": {"Authorization": f"Bearer {KIE_KEY}", "Content-Type": "application/json"},
+            "payload": {
+                "model": "gemini-3-7-flash",
+                "messages": [
+                    {"role": "user", "content": f"{SYSTEM_PROMPT}\n\nЗАДАНИЕ:\n{user_prompt}"}
+                ],
+                "temperature": 0.75
+            }
+        })
+
+        # 4. KIE.ai нативные Gemini 3.7 Flash прокси :generateContent
+        gemini_native_payload = {
+            "contents": [{"parts": [{"text": f"{SYSTEM_PROMPT}\n\nЗАДАНИЕ:\n{user_prompt}"}]}],
+            "generationConfig": {"temperature": 0.75}
         }
-    }
+        endpoints.append({
+            "desc": "KIE.ai Gemini 3.7 Flash native proxy (gemini-3.7-flash)",
+            "url": f"https://api.kie.ai/gemini/v1/models/gemini-3.7-flash:generateContent?key={KIE_KEY}",
+            "headers": {"Authorization": f"Bearer {KIE_KEY}", "x-goog-api-key": KIE_KEY, "Content-Type": "application/json"},
+            "payload": gemini_native_payload
+        })
+        endpoints.append({
+            "desc": "KIE.ai Gemini 3.7 Flash native proxy (gemini-3-7-flash)",
+            "url": f"https://api.kie.ai/gemini/v1/models/gemini-3-7-flash:generateContent?key={KIE_KEY}",
+            "headers": {"Authorization": f"Bearer {KIE_KEY}", "x-goog-api-key": KIE_KEY, "Content-Type": "application/json"},
+            "payload": gemini_native_payload
+        })
+
+    # 5. Официальный Google Gemini API (строго gemini-3.7-flash)
+    if GEMINI_KEY:
+        google_payload = {
+            "contents": [{"parts": [{"text": f"{SYSTEM_PROMPT}\n\nЗАДАНИЕ:\n{user_prompt}"}]}],
+            "generationConfig": {"temperature": 0.75}
+        }
+        endpoints.append({
+            "desc": "Official Google Gemini 3.7 Flash API (gemini-3.7-flash)",
+            "url": f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.7-flash:generateContent?key={GEMINI_KEY}",
+            "headers": {"Content-Type": "application/json"},
+            "payload": google_payload
+        })
 
     last_error = ""
-    for target_url in urls:
+    for ep in endpoints:
+        desc = ep["desc"]
+        url = ep["url"]
+        headers = ep["headers"]
+        payload = ep["payload"]
         try:
-            logging.info("Отправка запроса в KIE.ai Gemini 3.7 Flash (таймаут 90с)...")
-            resp = requests.post(target_url, headers=headers, json=payload, timeout=90)
+            logging.info(f"Отправка запроса в {desc}...")
+            resp = requests.post(url, headers=headers, json=payload, timeout=60)
             if resp.status_code == 200:
                 raw_json = resp.json()
-                
-                if isinstance(raw_json, dict) and (raw_json.get("code") in [500, 400, 401, 403] or "Server exception" in str(raw_json)):
-                    last_error = f"KIE error: {raw_json.get('msg', 'Server exception')}"
-                    continue
-
-                candidates = raw_json.get("candidates", []) if isinstance(raw_json, dict) else []
-                if not candidates:
-                    continue
-
-                content_parts = candidates[0].get("content", {}).get("parts", [])
-                if not content_parts:
-                    continue
-
-                raw_text = content_parts[0].get("text", "")
-                clean_str = raw_text.strip()
-                if clean_str.startswith("```json"):
-                    clean_str = clean_str[7:]
-                if clean_str.startswith("```"):
-                    clean_str = clean_str[3:]
-                if clean_str.endswith("```"):
-                    clean_str = clean_str[:-3]
-                clean_str = clean_str.strip()
-
-                match = re.search(r'\{[\s\S]*\}', clean_str)
-                if match:
-                    parsed = json.loads(match.group(0))
-                    if "code" in parsed and "msg" in parsed:
+                if isinstance(raw_json, dict):
+                    code = raw_json.get("code")
+                    msg = str(raw_json.get("msg") or raw_json.get("message") or "")
+                    if (code is not None and code not in [200, 0]) or "The page does not exist" in msg or "exception" in msg.lower():
+                        last_error = f"{desc}: {msg or f'code {code}'}"
+                        logging.warning(f"Ошибка ответа {desc}: {last_error}, пробуем следующий вариант...")
                         continue
 
-                    post_text = parsed.get("post_text") or parsed.get("text") or parsed.get("post") or parsed.get("content")
-                    image_prompt = parsed.get("image_prompt") or parsed.get("prompt") or parsed.get("image")
-                    
-                    if post_text and len(str(post_text).strip()) > 50:
-                        return str(post_text).strip(), str(image_prompt or "healthy cardiology food lifestyle").strip()
+                raw_text = extract_text_from_ai_json(raw_json)
+                post_text, image_prompt = parse_ai_json_response(raw_text)
+                if post_text:
+                    logging.info(f"Успешная генерация текста через {desc}!")
+                    return post_text, image_prompt
+                else:
+                    last_error = f"{desc}: некорректный ответ модели ({raw_text[:120]}...)"
+                    logging.warning(last_error)
+                    continue
             else:
-                last_error = f"HTTP {resp.status_code}: {resp.text[:120]}"
+                last_error = f"{desc}: HTTP {resp.status_code} ({resp.text[:120]})"
+                logging.warning(f"Сбой HTTP от {desc}: {last_error}, переходим к следующему...")
+                continue
         except Exception as e:
-            last_error = str(e)
+            last_error = f"{desc}: {e}"
+            logging.warning(f"Исключение при запросе к {desc}: {e}, переходим к следующему...")
             continue
 
-    raise Exception(f"KIE.ai Gemini 3.7 ошибка: {last_error}")
+    raise Exception(f"Все доступные варианты Gemini 3.7 завершились ошибкой. Последняя: {last_error}")
 
 def extract_all_urls_from_any_json(obj) -> list:
     found = []
@@ -546,6 +734,11 @@ def fetch_biomolecula_article() -> dict:
                         title = h1.get_text(strip=True) if h1 else "Научная статья"
                         paras = [p.get_text(strip=True) for p in soup.find_all("p") if len(p.get_text(strip=True)) > 40]
                         content = "\n".join(paras[:5])
+                        
+                        relevant, _ = is_relevant_ru_article(title, content)
+                        if not relevant:
+                            continue
+
                         if len(content) > 100:
                             return {
                                 "id": url,
@@ -598,8 +791,7 @@ def fetch_russian_journals_rss(target_source: str = None) -> dict:
                 if not items:
                     items = root.findall(".//{http://www.w3.org/2005/Atom}entry")
 
-                random.shuffle(items)
-
+                candidates = []
                 for item in items:
                     # Корректный поиск элементов без ошибочного приведения bool(elem)
                     title_elem = find_xml_elem(item, ["title", "{http://www.w3.org/2005/Atom}title"])
@@ -624,6 +816,11 @@ def fetch_russian_journals_rss(target_source: str = None) -> dict:
                     raw_desc = desc_elem.text if (desc_elem is not None and desc_elem.text) else ""
                     clean_desc = BeautifulSoup(raw_desc, "html.parser").get_text(separator=" ", strip=True) if raw_desc else ""
 
+                    # Быстрая проверка на стоп-слова и релевантность по заголовку и описанию
+                    relevant, score = is_relevant_ru_article(title, clean_desc)
+                    if not relevant:
+                        continue
+
                     article_text = clean_desc
                     # Если описание в RSS короткое (<450 симв.), пробуем подгрузить текст напрямую со страницы статьи
                     if len(article_text) < 450:
@@ -631,24 +828,51 @@ def fetch_russian_journals_rss(target_source: str = None) -> dict:
                             art_resp = requests.get(link, headers=headers, timeout=5)
                             if art_resp.status_code == 200:
                                 art_soup = BeautifulSoup(art_resp.content, "html.parser")
-                                paras = [p.get_text(strip=True) for p in art_soup.find_all("p") if len(p.get_text(strip=True)) > 40]
+                                # Убираем скрипты, стили, навигацию, формы и шапки/подвалы
+                                for tag in art_soup(["script", "style", "nav", "header", "footer", "aside", "form"]):
+                                    tag.decompose()
+                                # Ищем блок с текстом статьи
+                                content_box = (
+                                    art_soup.find("article") or
+                                    art_soup.find(class_=lambda c: c and any(k in str(c).lower() for k in ["entry-content", "post-content", "body_container", "article-body", "article__body", "article-content", "main-content"])) or
+                                    art_soup
+                                )
+                                paras = [p.get_text(separator=" ", strip=True) for p in content_box.find_all("p") if len(p.get_text(strip=True)) > 40]
                                 if paras:
-                                    article_text = "\n".join(paras[:6])
+                                    article_text = "\n".join(paras[:8])
                         except Exception:
                             pass
+
+                    # Удаление скрытых служебных символов и нормализация пробелов
+                    article_text = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', '', article_text).strip()
 
                     if len(article_text) < 60:
                         continue
 
-                    return {
-                        "id": link,
-                        "title": title,
-                        "journal": j["name"],
-                        "category": j["category"],
-                        "content": f"Заголовок: {title}\nИздание: {j['name']}\n\nТекст статьи:\n{article_text[:2800]}",
-                        "url": link,
-                        "hashtags": j.get("hashtags", "#Липидограм_Наука #Доказательно #Кардиология")
-                    }
+                    # Повторная строгая валидация с учетом полного текста
+                    relevant, score = is_relevant_ru_article(title, article_text)
+                    if not relevant:
+                        continue
+
+                    candidates.append({
+                        "score": score,
+                        "data": {
+                            "id": link,
+                            "title": title,
+                            "journal": j["name"],
+                            "category": j["category"],
+                            "content": f"Заголовок: {title}\nИздание: {j['name']}\n\nТекст статьи:\n{article_text[:2800]}",
+                            "url": link,
+                            "hashtags": j.get("hashtags", "#Липидограм_Наука #Доказательно #Кардиология")
+                        }
+                    })
+
+                if candidates:
+                    # Приоритет: сначала материалы по кардиологии / холестерину / сосудам (score=2), затем общемедицинские (score=1)
+                    candidates.sort(key=lambda x: x["score"], reverse=True)
+                    best_score = candidates[0]["score"]
+                    top_pool = [c["data"] for c in candidates if c["score"] == best_score]
+                    return random.choice(top_pool)
         except Exception as e:
             logging.warning(f"Ошибка парсинга журнала {j['name']}: {e}")
             continue
@@ -719,7 +943,7 @@ def check_russian_journals_status() -> str:
             note = " [Исключен из авто-ротации]" if j.get("cloud_blocked") else ""
             results.append(
                 f"🔴 <b>{name}</b> (RSS){note}\n"
-                f"• Статус: Таймаут соединения ({timeout_sec}с). Сервер 22century.ru блокирует IP дата-центров (Render/AWS).\n"
+                f"• Статус: Таймаут соединения ({timeout_sec}с).\n"
             )
         except Exception as e:
             results.append(f"🔴 <b>{name}</b>: Ошибка {e}\n")
@@ -1182,16 +1406,19 @@ async def generate_and_publish_post(custom_rubric: dict = None, with_image: bool
 async def cmd_start(message: types.Message):
     await message.reply(
         "🫀 <b>Медиа-бот «Липидограм» (@lipidogram)</b>\n\n"
+        "🧪 <b>СКВОЗНОЕ ТЕСТИРОВАНИЕ ВСЕХ ИСТОЧНИКОВ:</b>\n"
+        "• <b>/test_all</b> — 🚀 <b>последовательно протестировать ВСЕ рубрики и ВСЕ 11 источников</b> канала по очереди (PubMed, Мифы, Спорт, Рецепты, YouTube, Биомолекула, Зожник, Хабр Здоровье, Хабр Биотех, N+1, Naked Science).\n\n"
         "🎲 <b>СЛУЧАЙНЫЙ ПОСТ ИЗ ЛЮБОЙ РУБРИКИ И ИСТОЧНИКА:</b>\n"
         "• <b>/test_random</b> — 🧪 быстрый тест <b>БЕЗ картинки</b> (PubMed, РосЖурналы, YouTube, Рецепты, Мифы, Спорт). 0 кредитов, 2 сек.\n"
         "• <b>/post_random</b> — 🎨 полный пост <b>С генерацией арта</b> Nano Banana 2 Lite из случайного источника.\n\n"
         "<b>📌 Тематические команды БЕЗ картинки (быстро, 0 кредитов):</b>\n"
         "• /test_pubmed — свежее исследование PubMed (мета-анализы, липиды)\n"
-        "• /test_ru — случайный российский журнал (Биомолекула, Зожник, Хабр, N+1)\n"
-        "• /test_ru_status — 🔎 <b>диагностика и статус связи со всеми российскими журналами</b>\n"
+        "• /test_myth — разбор мифа через PubMed\n"
+        "• /test_sport — активность и сосуды через PubMed\n"
         "• /test_recipe — гиполипидемический рецепт\n"
         "• /test_youtube — выжимка видео (РКО, Утин, Гаглошвили, Attia)\n"
-        "• /test_myth — разбор мифа через PubMed\n\n"
+        "• /test_ru — случайный российский журнал (Биомолекула, Зожник, Хабр, N+1, Naked Science)\n"
+        "• /test_ru_status — 🔎 <b>диагностика и статус связи со всеми российскими журналами</b>\n\n"
         "<b>🎯 Адресная проверка российских журналов:</b>\n"
         "• <code>/test_ru zozhnik</code> (или /test_zozhnik) — тест «Зожник»\n"
         "• <code>/test_ru habr</code> (или /test_habr) — тест «Хабр Здоровье»\n"
@@ -1252,8 +1479,90 @@ async def cmd_post_my(message: types.Message):
     success, res = await generate_and_publish_post(RUBRIC_MYTHS, with_image=True)
     await message.reply("✅ " + res if success else "❌ " + res)
 
+# --- СПИСОК ВСЕХ РУБРИК И ИСТОЧНИКОВ ДЛЯ СКВОЗНОГО ТЕСТИРОВАНИЯ ---
+ALL_TEST_CASES = [
+    {"name": "🔬 PubMed (Клинический дайджест: кардиология и липиды)", "type": "rubric", "rubric": RUBRIC_ACADEMIC_SCIENCE},
+    {"name": "💡 PubMed (Разбор мифа доказательной медициной)", "type": "rubric", "rubric": RUBRIC_MYTHS},
+    {"name": "🏃 PubMed (Физическая активность и эластичность сосудов)", "type": "rubric", "rubric": RUBRIC_SPORT},
+    {"name": "🥗 Гиполипидемическая кухня (Рецепты для снижения ЛПНП)", "type": "rubric", "rubric": RUBRIC_RECIPES},
+    {"name": "📺 Научпоп и эксперты (YouTube-видео кардиологов)", "type": "rubric", "rubric": RUBRIC_YOUTUBE},
+    {"name": "🇷🇺 Российские издания: «Биомолекула»", "type": "ru", "source": "biomolecula"},
+    {"name": "🇷🇺 Российские издания: «Зожник»", "type": "ru", "source": "zozhnik"},
+    {"name": "🇷🇺 Российские издания: «Хабр Здоровье»", "type": "ru", "source": "habr_health"},
+    {"name": "🇷🇺 Российские издания: «Хабр Биотех»", "type": "ru", "source": "habr_biotech"},
+    {"name": "🇷🇺 Российские издания: «N+1»", "type": "ru", "source": "nplus1"},
+    {"name": "🇷🇺 Российские издания: «Naked Science (Медицина)»", "type": "ru", "source": "naked_science"}
+]
+
+# --- СКВОЗНОЙ ТЕСТ ВСЕХ РУБРИК И ВСЕХ ИСТОЧНИКОВ ПО ОЧЕРЕДИ ---
+@dp.message(Command("test_all", "test_all_sources", "test_everything", "test_suite"))
+async def cmd_test_all(message: types.Message):
+    total = len(ALL_TEST_CASES)
+    status_msg = await message.reply(
+        f"🚀 <b>Запуск сквозного тестирования ВСЕХ {total} рубрик и источников!</b>\n\n"
+        f"<i>Тестирование выполняется последовательно через Gemini 3.7 Flash без генерации картинок (0 кредитов KIE, безопасно для баланса).</i>\n\n"
+        f"⏳ Начинаю проверку 1/{total}...",
+        parse_mode="HTML"
+    )
+
+    success_count = 0
+    fail_count = 0
+    results_log = []
+
+    for idx, tc in enumerate(ALL_TEST_CASES, start=1):
+        name = tc["name"]
+        logging.info(f"Сквозной тест [{idx}/{total}]: {name}")
+        
+        try:
+            if tc["type"] == "rubric":
+                success, res = await generate_and_publish_post(tc["rubric"], with_image=False)
+            else:
+                success, res = await generate_and_publish_post(with_image=False, source_mode="ru_journals", target_source=tc["source"])
+        except Exception as e:
+            success, res = False, str(e)
+
+        if success:
+            success_count += 1
+            icon = "✅"
+            short_res = "Успешно опубликован"
+        else:
+            fail_count += 1
+            icon = "❌"
+            short_res = res[:90]
+
+        log_line = f"{icon} <b>[{idx}/{total}]</b> {name}: {short_res}"
+        results_log.append(log_line)
+
+        # Отправляем отдельное короткое сообщение по каждому источнику в чат
+        await message.reply(log_line, parse_mode="HTML")
+
+        # Обновляем статусное сообщение
+        try:
+            await status_msg.edit_text(
+                f"🚀 <b>Сквозное тестирование: выполнено {idx}/{total}</b>\n\n"
+                f"• Успешно: ✅ {success_count}\n"
+                f"• Ошибок: ❌ {fail_count}\n\n"
+                f"⏳ Следующий источник...",
+                parse_mode="HTML"
+            )
+        except Exception:
+            pass
+
+        if idx < total:
+            await asyncio.sleep(2)
+
+    await message.reply(
+        f"🏁 <b>Сквозное тестирование ВСЕХ {total} рубрик и источников завершено!</b>\n\n"
+        f"📊 <b>ИТОГИ ПРОВЕРКИ:</b>\n"
+        f"• Всего источников: {total}\n"
+        f"• Успешно: ✅ <b>{success_count}</b>\n"
+        f"• С ошибками: ❌ <b>{fail_count}</b>\n\n"
+        f"<b>Детальный отчет:</b>\n" + "\n".join(results_log),
+        parse_mode="HTML"
+    )
+
 # --- Тестовые команды БЕЗ генерации картинки (0 кредитов KIE, быстро) ---
-@dp.message(Command("test_random", "test_any", "test_all", "test_text"))
+@dp.message(Command("test_random", "test_any", "test_text"))
 async def cmd_test_random(message: types.Message):
     await message.reply("⚡ 🎲 Запуск генерации из случайного источника (PubMed / РосЖурналы / YouTube / Рецепты / Мифы) без картинки...")
     success, res = await generate_and_publish_post(with_image=False, source_mode="random")
@@ -1263,6 +1572,12 @@ async def cmd_test_random(message: types.Message):
 async def cmd_test_pubmed(message: types.Message):
     await message.reply("⚡ Ищу свежее клиническое исследование в PubMed (без картинки)...")
     success, res = await generate_and_publish_post(RUBRIC_ACADEMIC_SCIENCE, with_image=False)
+    await message.reply("✅ " + res if success else "❌ " + res)
+
+@dp.message(Command("test_sport", "test_activity"))
+async def cmd_test_sport(message: types.Message):
+    await message.reply("⚡ Ищу исследование по физической активности и сосудам в PubMed (без картинки)...")
+    success, res = await generate_and_publish_post(RUBRIC_SPORT, with_image=False)
     await message.reply("✅ " + res if success else "❌ " + res)
 
 @dp.message(Command("test_recipe"))
@@ -1296,10 +1611,7 @@ async def cmd_test_ru(message: types.Message):
         "нейкед": "«Naked Science»",
         "bio": "«Биомолекула»",
         "био": "«Биомолекула»",
-        "biomolecula": "«Биомолекула»",
-        "22": "«XX2 Век»",
-        "xx2": "«XX2 Век»",
-        "22century": "«XX2 Век»"
+        "biomolecula": "«Биомолекула»"
     }
 
     label = target_labels.get(target, f"«{target}»") if target else "случайный журнал (Биомолекула, Зожник, Хабр, N+1, Naked Science)"
