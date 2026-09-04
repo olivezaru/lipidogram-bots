@@ -96,15 +96,32 @@ def mark_as_published(item_id_or_url: str):
     published_history.add(clean)
     save_history(published_history)
 
+# Вспомогательная функция для безопасного поиска XML-тегов
+def find_xml_elem(parent, tag_names: list):
+    """
+    Безопасный поиск первого существующего тега в XML ElementTree.
+    В Python bool(Element) возвращает False, если у тега нет дочерних узлов!
+    Поэтому конструкция 'elem.find("a") or elem.find("b")' всегда сбрасывалась в None.
+    """
+    for tag in tag_names:
+        elem = parent.find(tag)
+        if elem is not None:
+            return elem
+    return None
+
 # 1. Российские научно-популярные и медицинские журналы и ленты
 RU_JOURNALS_RSS = [
     {
+        "id": "biomolecula",
+        "aliases": ["био", "биомолекула", "bio", "biomolecula"],
         "type": "biomolecula",
         "name": "Журнал «Биомолекула» (молекулярная медицина и биохимия)",
         "category": "🔬 НАУЧНЫЙ ДАЙДЖЕСТ: БИОХИМИЯ И СОСУДЫ",
         "hashtags": "#Липидограм_Наука #Биомолекула #Биохимия #Кардиология"
     },
     {
+        "id": "zozhnik",
+        "aliases": ["зожник", "zozhnik", "zozh"],
         "type": "rss",
         "name": "Журнал доказательного фитнеса и питания «Зожник»",
         "rss": "https://zozhnik.ru/feed",
@@ -112,20 +129,26 @@ RU_JOURNALS_RSS = [
         "hashtags": "#Липидограм_Наука #Зожник #ПитаниеСердца #Клетчатка"
     },
     {
+        "id": "habr_health",
+        "aliases": ["хабр", "habr", "здоровье", "health", "habr_health"],
         "type": "rss",
         "name": "Хабр Научпоп (Медицина, здоровье и биохимия)",
-        "rss": "https://habr.com/ru/rss/hub/health/all/?fl=ru",
+        "rss": "https://habr.com/ru/rss/hubs/health/?fl=ru",
         "category": "🔬 НАУЧНЫЙ ДАЙДЖЕСТ: МЕДИЦИНА И ЗДОРОВЬЕ",
         "hashtags": "#Липидограм_Наука #ХабрНаука #ЗдоровьеСосудов #Кардиология"
     },
     {
+        "id": "habr_biotech",
+        "aliases": ["биотех", "biotech", "генетика", "habr_biotech"],
         "type": "rss",
         "name": "Хабр Биотехнологии и генетика",
-        "rss": "https://habr.com/ru/rss/hub/biotech/all/?fl=ru",
+        "rss": "https://habr.com/ru/rss/hubs/biotech/?fl=ru",
         "category": "🧬 БИОТЕХНОЛОГИИ И МОЛЕКУЛЯРНАЯ МЕДИЦИНА",
         "hashtags": "#Липидограм_Наука #Биотехнологии #Генетика #Кардиология"
     },
     {
+        "id": "nplus1",
+        "aliases": ["n1", "nplus1", "н1", "нплюсодин", "n+1"],
         "type": "rss",
         "name": "N+1 (Наука, физиология и медицина)",
         "rss": "https://nplus1.ru/rss",
@@ -133,11 +156,14 @@ RU_JOURNALS_RSS = [
         "hashtags": "#Липидограм_Наука #NPlus1 #Доказательно #Кардиология"
     },
     {
+        "id": "22century",
+        "aliases": ["22", "xx2", "22century", "22век", "век"],
         "type": "rss",
         "name": "XX2 Век (Доказательная медицина и биология)",
         "rss": "https://22century.ru/feed",
         "category": "🔬 НАУКА И ДОКАЗАТЕЛЬНАЯ МЕДИЦИНА",
-        "hashtags": "#Липидограм_Наука #Наука #Здоровье #Кардиология"
+        "hashtags": "#Липидограм_Наука #Наука #Здоровье #Кардиология",
+        "timeout": 4
     }
 ]
 
@@ -444,17 +470,18 @@ def fetch_real_cardio_recipe() -> dict:
             if items:
                 random.shuffle(items)
                 for it in items:
-                    title_elem = it.find("title")
-                    link_elem = it.find("link")
-                    desc_elem = it.find("description")
+                    title_elem = find_xml_elem(it, ["title", "{http://www.w3.org/2005/Atom}title"])
+                    link_elem = find_xml_elem(it, ["link", "{http://www.w3.org/2005/Atom}link"])
+                    desc_elem = find_xml_elem(it, ["{http://purl.org/rss/1.0/modules/content/}encoded", "description", "{http://www.w3.org/2005/Atom}summary"])
+
                     if title_elem is not None and link_elem is not None:
-                        t = title_elem.text or ""
-                        l = link_elem.text or ""
+                        t = title_elem.text.strip() if title_elem.text else ""
+                        l = link_elem.text.strip() if link_elem.text else link_elem.attrib.get("href", "").strip()
                         
-                        if is_already_published(l):
+                        if not l or is_already_published(l):
                             continue
 
-                        d = desc_elem.text if desc_elem is not None else ""
+                        d = desc_elem.text if (desc_elem is not None and desc_elem.text) else ""
                         clean_d = BeautifulSoup(d, "html.parser").get_text(separator=" ", strip=True)
                         if any(kw in f"{t} {clean_d}".lower() for kw in ["рыб", "овсян", "чечевиц", "нут", "фасол", "авокадо", "салат", "оливк", "семен", "овощ", "клетчатк"]):
                             return {
@@ -522,10 +549,23 @@ def fetch_biomolecula_article() -> dict:
         logging.warning(f"Ошибка парсинга Биомолекулы: {e}")
     return None
 
-# ПАРСИНГ РОССИЙСКИХ НАУЧНЫХ ЖУРНАЛОВ (С РАВНОМЕРНЫМ РАНДОМОМ И ФИЛЬТРОМ ИСТОРИИ)
-def fetch_russian_journals_rss() -> dict:
+# ПАРСИНГ РОССИЙСКИХ НАУЧНЫХ ЖУРНАЛОВ (С АДРЕСНЫМ ВЫБОРОМ ИЛИ РАНДОМОМ)
+def fetch_russian_journals_rss(target_source: str = None) -> dict:
     journals = list(RU_JOURNALS_RSS)
-    random.shuffle(journals)
+
+    if target_source:
+        t_clean = target_source.strip().lower()
+        matched = [
+            j for j in journals 
+            if j.get("id") == t_clean or t_clean in j.get("aliases", [])
+        ]
+        if matched:
+            journals = matched
+        else:
+            logging.warning(f"Источник '{target_source}' не распознан, используем случайный пул.")
+            random.shuffle(journals)
+    else:
+        random.shuffle(journals)
 
     for j in journals:
         if j.get("type") == "biomolecula":
@@ -536,7 +576,8 @@ def fetch_russian_journals_rss() -> dict:
 
         try:
             headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-            resp = requests.get(j["rss"], headers=headers, timeout=8)
+            timeout_sec = j.get("timeout", 7)
+            resp = requests.get(j["rss"], headers=headers, timeout=timeout_sec)
             if resp.status_code == 200:
                 root = ET.fromstring(resp.content)
                 items = root.findall(".//item")
@@ -546,32 +587,43 @@ def fetch_russian_journals_rss() -> dict:
                 random.shuffle(items)
 
                 for item in items:
-                    title_elem = item.find("title") or item.find("{http://www.w3.org/2005/Atom}title")
-                    link_elem = item.find("link") or item.find("{http://www.w3.org/2005/Atom}link")
-                    desc_elem = item.find("description") or item.find("{http://www.w3.org/2005/Atom}summary")
+                    # Корректный поиск элементов без ошибочного приведения bool(elem)
+                    title_elem = find_xml_elem(item, ["title", "{http://www.w3.org/2005/Atom}title"])
+                    link_elem = find_xml_elem(item, ["link", "{http://www.w3.org/2005/Atom}link"])
+                    desc_elem = find_xml_elem(item, [
+                        "{http://purl.org/rss/1.0/modules/content/}encoded",
+                        "description",
+                        "{http://www.w3.org/2005/Atom}summary",
+                        "{http://www.w3.org/2005/Atom}content"
+                    ])
 
                     if title_elem is None or link_elem is None:
                         continue
 
-                    title = title_elem.text or ""
-                    link = link_elem.text if link_elem.text else link_elem.attrib.get("href", "")
+                    title = title_elem.text.strip() if (title_elem is not None and title_elem.text) else ""
+                    link = link_elem.text.strip() if (link_elem is not None and link_elem.text) else link_elem.attrib.get("href", "").strip()
                     
-                    if not link or is_already_published(link):
+                    if not link or not title or is_already_published(link):
                         continue
 
-                    raw_desc = desc_elem.text if desc_elem is not None and desc_elem.text else ""
-                    clean_desc = BeautifulSoup(raw_desc, "html.parser").get_text(separator=" ", strip=True)
+                    raw_desc = desc_elem.text if (desc_elem is not None and desc_elem.text) else ""
+                    clean_desc = BeautifulSoup(raw_desc, "html.parser").get_text(separator=" ", strip=True) if raw_desc else ""
 
                     article_text = clean_desc
-                    try:
-                        art_resp = requests.get(link, headers=headers, timeout=5)
-                        if art_resp.status_code == 200:
-                            art_soup = BeautifulSoup(art_resp.content, "html.parser")
-                            paras = [p.get_text(strip=True) for p in art_soup.find_all("p") if len(p.get_text(strip=True)) > 40]
-                            if paras:
-                                article_text = "\n".join(paras[:5])
-                    except Exception:
-                        pass
+                    # Если описание в RSS короткое (<450 симв.), пробуем подгрузить текст напрямую со страницы статьи
+                    if len(article_text) < 450:
+                        try:
+                            art_resp = requests.get(link, headers=headers, timeout=5)
+                            if art_resp.status_code == 200:
+                                art_soup = BeautifulSoup(art_resp.content, "html.parser")
+                                paras = [p.get_text(strip=True) for p in art_soup.find_all("p") if len(p.get_text(strip=True)) > 40]
+                                if paras:
+                                    article_text = "\n".join(paras[:6])
+                        except Exception:
+                            pass
+
+                    if len(article_text) < 60:
+                        continue
 
                     return {
                         "id": link,
@@ -586,7 +638,77 @@ def fetch_russian_journals_rss() -> dict:
             logging.warning(f"Ошибка парсинга журнала {j['name']}: {e}")
             continue
 
+    if target_source:
+        return None
+
     return fetch_rko_news()
+
+# ФУНКЦИЯ ДИАГНОСТИКИ И АДРЕСНОЙ ПРОВЕРКИ ВСЕХ РОССИЙСКИХ ИСТОЧНИКОВ
+def check_russian_journals_status() -> str:
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+    results = []
+
+    for j in RU_JOURNALS_RSS:
+        name = j["name"]
+        j_id = j["id"]
+
+        if j.get("type") == "biomolecula":
+            t0 = time.time()
+            try:
+                req = requests.get("https://biomolecula.ru/articles", headers=headers, timeout=6)
+                elapsed = time.time() - t0
+                if req.status_code == 200:
+                    slugs = re.findall(r'href=[\"\'](/articles/[a-z0-9\-]+)[\"\']', req.text)
+                    valid = [s for s in set(slugs) if s not in ['/articles/top', '/articles/archive']]
+                    results.append(
+                        f"🟢 <b>{name}</b> (скрапер HTML)\n"
+                        f"• Статус: Доступен (HTTP 200, {elapsed:.2f}с)\n"
+                        f"• Найдено статей на витрине: {len(valid)}\n"
+                        f"• Адресная команда: <code>/test_ru bio</code> или <code>/test_bio</code>\n"
+                    )
+                else:
+                    results.append(f"🔴 <b>{name}</b>: HTTP {req.status_code} ({elapsed:.2f}с)\n")
+            except Exception as e:
+                results.append(f"🔴 <b>{name}</b>: Ошибка сети ({e})\n")
+            continue
+
+        t0 = time.time()
+        timeout_sec = j.get("timeout", 5)
+        try:
+            resp = requests.get(j["rss"], headers=headers, timeout=timeout_sec)
+            elapsed = time.time() - t0
+            if resp.status_code == 200:
+                root = ET.fromstring(resp.content)
+                items = root.findall(".//item")
+                if not items:
+                    items = root.findall(".//{http://www.w3.org/2005/Atom}entry")
+
+                if items:
+                    sample_item = items[0]
+                    t_elem = find_xml_elem(sample_item, ["title", "{http://www.w3.org/2005/Atom}title"])
+                    l_elem = find_xml_elem(sample_item, ["link", "{http://www.w3.org/2005/Atom}link"])
+                    s_title = t_elem.text.strip() if (t_elem is not None and t_elem.text) else "Без названия"
+                    s_link = l_elem.text.strip() if (l_elem is not None and l_elem.text) else ""
+
+                    results.append(
+                        f"🟢 <b>{name}</b> (RSS)\n"
+                        f"• Статус: Отвечает ({elapsed:.2f}с, {len(items)} ст. в фиде)\n"
+                        f"• Свежая статья: «{s_title[:55]}...»\n"
+                        f"• Адресная команда: <code>/test_ru {j_id}</code>\n"
+                    )
+                else:
+                    results.append(f"🟡 <b>{name}</b>: RSS пуст\n")
+            else:
+                results.append(f"🔴 <b>{name}</b>: HTTP {resp.status_code} ({elapsed:.2f}с)\n")
+        except requests.Timeout:
+            results.append(
+                f"🔴 <b>{name}</b> (RSS)\n"
+                f"• Статус: Таймаут соединения ({timeout_sec}с). Сервер блокирует облачные IP.\n"
+            )
+        except Exception as e:
+            results.append(f"🔴 <b>{name}</b>: Ошибка {e}\n")
+
+    return "\n".join(results)
 
 # ФИЛЬТРАЦИЯ ВИДЕО (БЕЗ АНОНСОВ И БЕЗ ПОВТОРОВ ИЗ ИСТОРИИ)
 def fetch_global_youtube_video() -> dict:
@@ -906,7 +1028,7 @@ def pick_rubric_by_schedule() -> dict:
             evening_plan = [RUBRIC_MYTHS, RUBRIC_RECIPES, RUBRIC_MYTHS, RUBRIC_RECIPES, RUBRIC_SPORT, RUBRIC_RECIPES, RUBRIC_MYTHS]
             return evening_plan[weekday % len(evening_plan)]
 
-async def generate_and_publish_post(custom_rubric: dict = None, with_image: bool = True, source_mode: str = "auto") -> tuple[bool, str]:
+async def generate_and_publish_post(custom_rubric: dict = None, with_image: bool = True, source_mode: str = "auto", target_source: str = None) -> tuple[bool, str]:
     if not KIE_KEY:
         err = "KIE_API_KEY не установлен в переменных Render!"
         logging.error(err)
@@ -927,7 +1049,11 @@ async def generate_and_publish_post(custom_rubric: dict = None, with_image: bool
     study_id = None
 
     if source_mode == "ru_journals" or rubric.get("source_type") == "ru_journals":
-        study = fetch_russian_journals_rss()
+        study = fetch_russian_journals_rss(target_source=target_source)
+        if not study:
+            src_str = f" для «{target_source}»" if target_source else ""
+            return False, f"Не удалось получить материал из российских изданий{src_str}. Возможно, источник временно недоступен."
+
         study_id = study.get("id") or study.get("url")
         category = study.get("category", "🔬 РОССИЙСКАЯ ДОКАЗАТЕЛЬНАЯ МЕДИЦИНА")
         hashtags = study.get("hashtags", rubric['hashtags'])
@@ -1045,14 +1171,21 @@ async def cmd_start(message: types.Message):
         "• <b>/post_random</b> — 🎨 полный пост <b>С генерацией арта</b> Nano Banana 2 Lite из случайного источника.\n\n"
         "<b>📌 Тематические команды БЕЗ картинки (быстро, 0 кредитов):</b>\n"
         "• /test_pubmed — свежее исследование PubMed (мета-анализы, липиды)\n"
-        "• /test_ru — российские журналы (Биомолекула, Зожник, Хабр, N+1, 22Век)\n"
+        "• /test_ru — случайный российский журнал (Биомолекула, Зожник, Хабр, N+1)\n"
+        "• /test_ru_status — 🔎 <b>диагностика и статус связи со всеми российскими журналами</b>\n"
         "• /test_recipe — гиполипидемический рецепт\n"
         "• /test_youtube — выжимка видео (РКО, Утин, Гаглошвили, Attia)\n"
         "• /test_myth — разбор мифа через PubMed\n\n"
+        "<b>🎯 Адресная проверка российских журналов:</b>\n"
+        "• <code>/test_ru zozhnik</code> (или /test_zozhnik) — тест «Зожник»\n"
+        "• <code>/test_ru habr</code> (или /test_habr) — тест «Хабр Здоровье»\n"
+        "• <code>/test_ru biotech</code> (или /test_biotech) — тест «Хабр Биотех»\n"
+        "• <code>/test_ru n1</code> (или /test_nplus1) — тест «N+1»\n"
+        "• <code>/test_ru bio</code> (или /test_bio) — тест «Биомолекула»\n\n"
         "<b>🖼 Публикации С картинкой Nano Banana 2 Lite:</b>\n"
         "• /post_now — по расписанию дня\n"
         "• /post_pubmed — исследование PubMed с иллюстрацией\n"
-        "• /post_ru — российские журналы с иллюстрацией",
+        "• /post_ru — российские журналы с иллюстрацией (можно указать источник: <code>/post_ru zozhnik</code>)",
         parse_mode="HTML"
     )
 
@@ -1083,8 +1216,11 @@ async def cmd_post_rec(message: types.Message):
 
 @dp.message(Command("post_ru"))
 async def cmd_post_ru(message: types.Message):
-    await message.reply("🇷🇺 Анализирую российские научные журналы и создаю арт...")
-    success, res = await generate_and_publish_post(with_image=True, source_mode="ru_journals")
+    args = message.text.split()[1:] if message.text else []
+    target = args[0].strip().lower() if args else None
+    label = f" ({target})" if target else ""
+    await message.reply(f"🇷🇺 Анализирую российские научные журналы{label} и создаю арт...")
+    success, res = await generate_and_publish_post(with_image=True, source_mode="ru_journals", target_source=target)
     await message.reply("✅ " + res if success else "❌ " + res)
 
 @dp.message(Command("post_youtube"))
@@ -1118,11 +1254,84 @@ async def cmd_test_rec(message: types.Message):
     success, res = await generate_and_publish_post(RUBRIC_RECIPES, with_image=False)
     await message.reply("✅ " + res if success else "❌ " + res)
 
+# Команда /test_ru с поддержкой аргументов: /test_ru zozhnik, /test_ru habr, /test_ru bio, /test_ru n1
 @dp.message(Command("test_ru"))
 async def cmd_test_ru(message: types.Message):
-    await message.reply("⚡ Анализирую российские журналы (Биомолекула, Habr, Зожник, N+1)...")
-    success, res = await generate_and_publish_post(with_image=False, source_mode="ru_journals")
+    args = message.text.split()[1:] if message.text else []
+    target = args[0].strip().lower() if args else None
+
+    target_labels = {
+        "zozhnik": "«Зожник»",
+        "зожник": "«Зожник»",
+        "zozh": "«Зожник»",
+        "habr": "«Хабр Здоровье»",
+        "хабр": "«Хабр Здоровье»",
+        "habr_health": "«Хабр Здоровье»",
+        "biotech": "«Хабр Биотех»",
+        "биотех": "«Хабр Биотех»",
+        "habr_biotech": "«Хабр Биотех»",
+        "nplus1": "«N+1»",
+        "n1": "«N+1»",
+        "н1": "«N+1»",
+        "bio": "«Биомолекула»",
+        "био": "«Биомолекула»",
+        "biomolecula": "«Биомолекула»",
+        "22": "«XX2 Век»",
+        "xx2": "«XX2 Век»",
+        "22century": "«XX2 Век»"
+    }
+
+    label = target_labels.get(target, f"«{target}»") if target else "случайный журнал (Биомолекула, Зожник, Хабр, N+1)"
+    await message.reply(f"⚡ Анализирую российские журналы [{label}] (без арта)...")
+    success, res = await generate_and_publish_post(with_image=False, source_mode="ru_journals", target_source=target)
     await message.reply("✅ " + res if success else "❌ " + res)
+
+# Адресные команды-быстрые клавиши
+@dp.message(Command("test_zozhnik", "test_zozh"))
+async def cmd_test_zozhnik(message: types.Message):
+    await message.reply("⚡ Запрашиваю статью из журнала «Зожник» (без арта)...")
+    success, res = await generate_and_publish_post(with_image=False, source_mode="ru_journals", target_source="zozhnik")
+    await message.reply("✅ " + res if success else "❌ " + res)
+
+@dp.message(Command("test_habr"))
+async def cmd_test_habr(message: types.Message):
+    await message.reply("⚡ Запрашиваю статью из «Хабр Здоровье» (без арта)...")
+    success, res = await generate_and_publish_post(with_image=False, source_mode="ru_journals", target_source="habr_health")
+    await message.reply("✅ " + res if success else "❌ " + res)
+
+@dp.message(Command("test_biotech"))
+async def cmd_test_biotech(message: types.Message):
+    await message.reply("⚡ Запрашиваю статью из «Хабр Биотех» (без арта)...")
+    success, res = await generate_and_publish_post(with_image=False, source_mode="ru_journals", target_source="habr_biotech")
+    await message.reply("✅ " + res if success else "❌ " + res)
+
+@dp.message(Command("test_nplus1", "test_n1"))
+async def cmd_test_nplus1(message: types.Message):
+    await message.reply("⚡ Запрашиваю статью из «N+1» (без арта)...")
+    success, res = await generate_and_publish_post(with_image=False, source_mode="ru_journals", target_source="nplus1")
+    await message.reply("✅ " + res if success else "❌ " + res)
+
+@dp.message(Command("test_bio", "test_biomolecula"))
+async def cmd_test_bio(message: types.Message):
+    await message.reply("⚡ Запрашиваю статью из «Биомолекула» (без арта)...")
+    success, res = await generate_and_publish_post(with_image=False, source_mode="ru_journals", target_source="biomolecula")
+    await message.reply("✅ " + res if success else "❌ " + res)
+
+# Команда комплексной диагностики статуса всех российских источников
+@dp.message(Command("test_ru_status", "check_ru", "status_ru"))
+async def cmd_test_ru_status(message: types.Message):
+    await message.reply("🔎 Опрашиваю все российские источники (Биомолекула, Зожник, Хабр Здоровье, Хабр Биотех, N+1, XX2 Век)...")
+    report = check_russian_journals_status()
+    await message.reply(
+        f"📊 <b>ДИАГНОСТИКА РОССИЙСКИХ ИЗДАНИЙ:</b>\n\n{report}\n"
+        f"💡 <i>Адресные команды проверки:</i>\n"
+        f"• <code>/test_ru zozhnik</code> или <code>/test_zozhnik</code>\n"
+        f"• <code>/test_ru habr</code> или <code>/test_habr</code>\n"
+        f"• <code>/test_ru biotech</code> или <code>/test_biotech</code>\n"
+        f"• <code>/test_ru n1</code> или <code>/test_nplus1</code>\n"
+        f"• <code>/test_ru bio</code> или <code>/test_bio</code>",
+        parse_mode="HTML"
+    )
 
 @dp.message(Command("test_youtube"))
 async def cmd_test_yt(message: types.Message):
