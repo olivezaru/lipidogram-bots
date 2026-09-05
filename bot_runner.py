@@ -27,8 +27,12 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 load_dotenv()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
-MODERATOR_TOKEN = os.getenv("MODERATOR_BOT_TOKEN", "").strip()
-POSTER_TOKEN = os.getenv("POSTER_BOT_TOKEN", "").strip()
+DEFAULT_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip() or os.getenv("BOT_TOKEN", "").strip()
+MODERATOR_TOKEN = os.getenv("MODERATOR_BOT_TOKEN", "").strip() or DEFAULT_BOT_TOKEN
+POSTER_TOKEN = os.getenv("POSTER_BOT_TOKEN", "").strip() or DEFAULT_BOT_TOKEN or MODERATOR_TOKEN
+if not MODERATOR_TOKEN and POSTER_TOKEN:
+    MODERATOR_TOKEN = POSTER_TOKEN
+
 KIE_KEY = os.getenv("KIE_API_KEY", "").strip()
 GEMINI_KEY = os.getenv("GEMINI_API_KEY", "").strip() or os.getenv("GOOGLE_API_KEY", "").strip()
 KIE_MODEL = os.getenv("KIE_MODEL", "").strip()
@@ -42,8 +46,8 @@ EMAIL_PASS = os.getenv("EMAIL_PASS", "").strip()
 HISTORY_FILE = "published_history.json"
 MAX_HISTORY_SIZE = 300
 
-if not MODERATOR_TOKEN:
-    logging.error("КРИТИЧЕСКАЯ ОШИБКА: MODERATOR_BOT_TOKEN не задан!")
+if not MODERATOR_TOKEN and not POSTER_TOKEN:
+    logging.error("КРИТИЧЕСКАЯ ОШИБКА: Ни TELEGRAM_BOT_TOKEN, ни MODERATOR_BOT_TOKEN, ни POSTER_BOT_TOKEN не заданы!")
 
 bot_moderator = Bot(token=MODERATOR_TOKEN) if MODERATOR_TOKEN else None
 
@@ -1429,7 +1433,9 @@ async def cmd_start(message: types.Message):
         "<b>🖼 Публикации С картинкой Nano Banana 2 Lite:</b>\n"
         "• /post_now — по расписанию дня\n"
         "• /post_pubmed — исследование PubMed с иллюстрацией\n"
-        "• /post_ru — российские журналы с иллюстрацией (можно указать источник: <code>/post_ru zozhnik</code>)",
+        "• /post_ru — российские журналы с иллюстрацией (можно указать источник: <code>/post_ru zozhnik</code>)\n\n"
+        "🛡️ <b>Модерация комментариев:</b>\n"
+        "• <b>/mod_status</b> — 🔎 <b>проверить статус бота-модератора</b> и его права в группе комментариев",
         parse_mode="HTML"
     )
 
@@ -1685,13 +1691,68 @@ async def cmd_test_my(message: types.Message):
     success, res = await generate_and_publish_post(RUBRIC_MYTHS, with_image=False)
     await message.reply("✅ " + res if success else "❌ " + res)
 
-@dp.message(F.text)
+# --- ДИАГНОСТИКА И СТАТУС БОТА-МОДЕРАТОРА ---
+@dp.message(Command("mod_status", "check_mod", "status_mod", "moderator"))
+async def cmd_mod_status(message: types.Message):
+    lines = ["🛡️ <b>СТАТУС И ДИАГНОСТИКА БОТА-МОДЕРАТОРА КОММЕНТАРИЕВ</b>\n"]
+
+    if not bot_moderator:
+        lines.append("❌ <b>Бот-модератор НЕ инициализирован!</b>\n"
+                     "Ни одна из переменных токена (<code>TELEGRAM_BOT_TOKEN</code>, <code>MODERATOR_BOT_TOKEN</code>, <code>POSTER_BOT_TOKEN</code>) не задана.")
+        await message.reply("\n".join(lines), parse_mode="HTML")
+        return
+
+    try:
+        me = await bot_moderator.get_me()
+        lines.append(f"🤖 <b>Бот:</b> @{me.username} (ID: <code>{me.id}</code>)")
+        lines.append(f"📢 <b>Канал публикаций:</b> {CHANNEL_ID}")
+        lines.append(f"💬 <b>Текущий чат:</b> {message.chat.type} (ID: <code>{message.chat.id}</code>)")
+    except Exception as e:
+        lines.append(f"⚠️ Ошибка получения данных бота через Telegram API: {e}")
+        await message.reply("\n".join(lines), parse_mode="HTML")
+        return
+
+    if message.chat.type in ["group", "supergroup"]:
+        try:
+            bot_member = await bot_moderator.get_chat_member(message.chat.id, me.id)
+            is_admin = bot_member.status in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR]
+            can_delete = getattr(bot_member, "can_delete_messages", False)
+            can_restrict = getattr(bot_member, "can_restrict_members", False)
+
+            lines.append(f"\n<b>Права бота в этой группе обсуждений:</b>")
+            lines.append(f"• Статус администратора: {'✅ ДА' if is_admin else '❌ НЕТ (добавьте бота в администраторы группы!)'}")
+            lines.append(f"• Удаление сообщений: {'✅ ДА' if can_delete else '❌ НЕТ (включите тумблер «Удаление сообщений»)'}")
+            lines.append(f"• Блокировка/мут спамеров: {'✅ ДА' if can_restrict else '❌ НЕТ (включите тумблер «Блокировка пользователей»)'}")
+
+            if is_admin and can_delete and can_restrict:
+                lines.append("\n🎉 <b>Модератор ПОЛНОСТЬЮ АКТИВЕН И РАБОТАЕТ!</b> Все сообщения и комментарии проверяются на спам и нецензурную лексику в реальном времени.")
+            else:
+                lines.append("\n⚠️ <b>ВНИМАНИЕ:</b> Чтобы бот мог модерировать чат, откройте: <i>Настройки группы ➔ Администраторы ➔ Добавить администратора ➔ выберите @{me.username}</i> и включите ему права на удаление сообщений и блокировку участников.")
+        except Exception as e:
+            lines.append(f"\n⚠️ Не удалось проверить права в чате: {e}")
+    else:
+        lines.append("\n💡 <i>Команда вызвана в личном диалоге с ботом. Чтобы проверить статус модерации комментариев канала, отправьте <code>/mod_status</code> прямо в привязанную группу обсуждений канала @lipidogram.</i>")
+
+    lines.append("\n<b>Активные алгоритмы защиты:</b>")
+    lines.append("• 🚫 Автоматический перехват нецензурной брани и оскорблений")
+    lines.append("• 🚫 Блокировка сторонних ссылок, t.me-каналов и рекламных юзернеймов (ссылки на @lipidogram разрешены)")
+    lines.append("• 🚫 Мониторинг как новых сообщений, так и отредактированных спамерами постов")
+    lines.append("• ⚖️ Лестница санкций: 1-е нарушение — удаление + предупреждение (1/3) ➔ 2-е — мут на 24 часа (2/3) ➔ 3-е — бан (3/3)")
+
+    await message.reply("\n".join(lines), parse_mode="HTML")
+
+# --- МОДЕРАЦИЯ КОММЕНТАРИЕВ И СООБЩЕНИЙ В ГРУППЕ ОБСУЖДЕНИЙ ---
+@dp.message(F.text | F.caption)
+@dp.edited_message(F.text | F.caption)
 async def handle_comment(message: types.Message):
     if message.chat.type == "private":
         return
     if message.sender_chat and message.sender_chat.type == "channel":
         return
+    if not message.from_user:
+        return
 
+    # Пропускаем администраторов чата
     if bot_moderator:
         try:
             chat_member = await bot_moderator.get_chat_member(message.chat.id, message.from_user.id)
@@ -1700,7 +1761,8 @@ async def handle_comment(message: types.Message):
         except Exception:
             pass
 
-    text = message.text.lower()
+    raw_text = message.text or message.caption or ""
+    text = raw_text.lower()
     user_id = message.from_user.id
     user_mention = message.from_user.mention_html()
 
@@ -1718,16 +1780,19 @@ async def handle_comment(message: types.Message):
         try:
             await message.delete()
         except Exception as e:
-            logging.error(f"Ошибка удаления: {e}")
+            logging.error(f"Ошибка удаления сообщения модератором: {e}")
 
         warnings = user_warnings.get(user_id, 0) + 1
         user_warnings[user_id] = warnings
 
         if warnings == 1:
-            await message.answer(
-                f"⚠️ {user_mention}, ваше сообщение удалено (причина: {reason}). Предупреждение: <b>1/3</b>.",
-                parse_mode="HTML"
-            )
+            try:
+                await message.answer(
+                    f"⚠️ {user_mention}, ваше сообщение удалено (причина: {reason}). Предупреждение: <b>1/3</b>.",
+                    parse_mode="HTML"
+                )
+            except Exception:
+                pass
         elif warnings == 2:
             until_date = datetime.now() + timedelta(days=1)
             try:
@@ -1742,17 +1807,132 @@ async def handle_comment(message: types.Message):
                     parse_mode="HTML"
                 )
             except Exception as e:
-                logging.error(f"Ошибка мута: {e}")
+                logging.error(f"Ошибка мута модератором: {e}")
         else:
             try:
                 await bot_moderator.ban_chat_member(chat_id=message.chat.id, user_id=user_id)
                 await message.answer(
-                    f"🚫 {user_mention} заблокирован за систематическое нарушение правил (3/3).",
+                    f"🚫 {user_mention} заблокирован за систематическое нарушение правил (3/3).\n"
+                    f"<i>ID: <code>{user_id}</code> | Разбан: <code>/unban {user_id}</code></i>",
                     parse_mode="HTML"
                 )
                 user_warnings.pop(user_id, None)
             except Exception as e:
-                logging.error(f"Ошибка бана: {e}")
+                logging.error(f"Ошибка бана модератором: {e}")
+
+# --- КОМАНДЫ УПРАВЛЕНИЯ БЛОКИРОВКАМИ И СНЯТИЯ НАКАЗАНИЙ ---
+async def get_target_user_id(message: types.Message) -> int | None:
+    if message.reply_to_message and message.reply_to_message.from_user:
+        return message.reply_to_message.from_user.id
+    parts = (message.text or "").strip().split()
+    if len(parts) > 1 and parts[1].isdigit():
+        return int(parts[1])
+    return None
+
+async def is_chat_admin(chat_id: int, user_id: int) -> bool:
+    if not bot_moderator:
+        return False
+    try:
+        member = await bot_moderator.get_chat_member(chat_id, user_id)
+        return member.status in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR]
+    except Exception:
+        return False
+
+@dp.message(Command("unban"))
+async def cmd_unban(message: types.Message):
+    if message.chat.type == "private":
+        await message.reply("Эта команда предназначена для использования в группе обсуждений канала.")
+        return
+
+    if not await is_chat_admin(message.chat.id, message.from_user.id):
+        await message.reply("⛔ Команда доступна только администраторам группы.")
+        return
+
+    target_id = await get_target_user_id(message)
+    if not target_id:
+        await message.reply(
+            "ℹ️ <b>Как разбанить пользователя:</b>\n"
+            "1. Ответьте командой <code>/unban</code> на любое сообщение пользователя\n"
+            "2. Либо напишите с указанием ID: <code>/unban 123456789</code>",
+            parse_mode="HTML"
+        )
+        return
+
+    try:
+        await bot_moderator.unban_chat_member(chat_id=message.chat.id, user_id=target_id, only_if_banned=True)
+        user_warnings.pop(target_id, None)
+        await message.reply(
+            f"✅ <b>Пользователь (ID: <code>{target_id}</code>) успешно разблокирован!</b>\n"
+            f"Блокировка снята, счетчик нарушений обнулен. Пользователь снова может вступить в чат.",
+            parse_mode="HTML"
+        )
+    except Exception as e:
+        await message.reply(f"❌ Ошибка разблокировки: {e}")
+
+@dp.message(Command("unmute"))
+async def cmd_unmute(message: types.Message):
+    if message.chat.type == "private":
+        await message.reply("Эта команда предназначена для использования в группе обсуждений канала.")
+        return
+
+    if not await is_chat_admin(message.chat.id, message.from_user.id):
+        await message.reply("⛔ Команда доступна только администраторам группы.")
+        return
+
+    target_id = await get_target_user_id(message)
+    if not target_id:
+        await message.reply(
+            "ℹ️ <b>Как снять мут с пользователя:</b>\n"
+            "1. Ответьте командой <code>/unmute</code> на сообщение пользователя\n"
+            "2. Либо укажите его ID: <code>/unmute 123456789</code>",
+            parse_mode="HTML"
+        )
+        return
+
+    try:
+        await bot_moderator.restrict_chat_member(
+            chat_id=message.chat.id,
+            user_id=target_id,
+            permissions=types.ChatPermissions(
+                can_send_messages=True,
+                can_send_media_messages=True,
+                can_send_other_messages=True,
+                can_add_web_page_previews=True
+            )
+        )
+        user_warnings.pop(target_id, None)
+        await message.reply(
+            f"🔊 <b>Режим чтения с пользователя (ID: <code>{target_id}</code>) снят!</b>\n"
+            f"Пользователь снова может писать сообщения и комментарии.",
+            parse_mode="HTML"
+        )
+    except Exception as e:
+        await message.reply(f"❌ Ошибка снятия мута: {e}")
+
+@dp.message(Command("clear_warns", "unwarn", "reset_warns"))
+async def cmd_clear_warns(message: types.Message):
+    if message.chat.type == "private":
+        await message.reply("Эта команда предназначена для использования в группе обсуждений канала.")
+        return
+
+    if not await is_chat_admin(message.chat.id, message.from_user.id):
+        await message.reply("⛔ Команда доступна только администраторам группы.")
+        return
+
+    target_id = await get_target_user_id(message)
+    if not target_id:
+        await message.reply(
+            "ℹ️ Ответьте командой <code>/clear_warns</code> на сообщение или укажите ID: <code>/clear_warns 123456789</code>",
+            parse_mode="HTML"
+        )
+        return
+
+    prev_warns = user_warnings.pop(target_id, 0)
+    await message.reply(
+        f"🧹 <b>Предупреждения пользователя (ID: <code>{target_id}</code>) сброшены!</b>\n"
+        f"Было предупреждений: {prev_warns}/3 ➔ стало: <b>0/3</b>.",
+        parse_mode="HTML"
+    )
 
 async def handle_ping(request):
     return web.Response(text="Lipidogram Bot Service is live and active 24/7!")
